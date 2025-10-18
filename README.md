@@ -150,6 +150,76 @@ bedrock_client = boto3.client(
 - 신뢰성: 조작 불가능
 - 관리: 중앙 집중식 관리
 
+#### ARN 패턴 필터링이란?
+
+`identity.arn` 필드에 특정 키워드가 포함된 사용자만 필터링하여 사용량을 확인하는 기능입니다.
+
+**예시:**
+- DataAnalysisApp Role: `arn:aws:iam::123456789012:role/assumed-role/DataAnalysisApp-BedrockRole`
+- 패턴: `DataAnalysisApp-BedrockRole` 또는 `DataAnalysis`
+
+#### 대시보드에서 사용
+
+1. Streamlit 대시보드 실행:
+   ```bash
+   streamlit run bedrock_tracker.py
+   ```
+
+2. 왼쪽 사이드바의 **"ARN 패턴 필터"** 입력 필드에 키워드 입력:
+   ```
+   DataAnalysis
+   ```
+
+3. **"데이터 분석"** 버튼 클릭
+
+4. 해당 패턴을 포함하는 사용자의 사용량만 필터링되어 표시됩니다.
+
+#### CLI에서 사용
+
+```bash
+#    DataAnalysis 사용량만 조회
+python bedrock_tracker_cli.py --days 7 --arn-pattern "DataAnalysis"
+
+# 특정 기간 + ARN 패턴
+python bedrock_tracker_cli.py \
+  --start-date 2025-10-11 \
+  --end-date 2025-10-18 \
+  --arn-pattern "DataAnalysis" \
+  --analysis all
+
+# CSV 파일로 저장
+python bedrock_tracker_cli.py \
+  --arn-pattern "DataAnalysis" \
+  --format csv
+```
+
+#### 활용 예시
+
+**1. DataAnalysis application 비용 분석:**
+```bash
+python bedrock_tracker_cli.py --arn-pattern "DataAnalysis" --analysis user
+```
+
+**2. 특정 팀의 Bedrock 사용량:**
+```bash
+python bedrock_tracker_cli.py --arn-pattern "DataTeam" --analysis all
+```
+
+**3. 여러 애플리케이션 비교:**
+```bash
+# App1 사용량
+python bedrock_tracker_cli.py --arn-pattern "App1" > app1_usage.txt
+
+# App2 사용량
+python bedrock_tracker_cli.py --arn-pattern "App2" > app2_usage.txt
+```
+
+#### 주의사항
+
+- ARN 패턴은 대소문자를 구분합니다
+- 빈 문자열을 입력하면 전체 사용량이 표시됩니다
+- 패턴은 `LIKE '%패턴%'` 형식으로 검색됩니다
+
 ---
 
 ## 목차
@@ -180,20 +250,6 @@ AWS Bedrock 모델 사용량을 **다중 리전**에서 추적하고 **애플리
 - **사용 패턴 분석**: 시간대별/일별 사용 패턴 파악
 - **리전별 분석**: 다중 리전(US, Asia, Europe)에서 사용량 통합 관리
 - **모델 최적화**: 모델별 사용 통계를 통한 비용 최적화
-
-### 지원 리전
-- **us-east-1**: US East (N. Virginia)
-- **us-west-2**: US West (Oregon)
-- **eu-central-1**: Europe (Frankfurt)
-- **ap-northeast-1**: Asia Pacific (Tokyo)
-- **ap-northeast-2**: Asia Pacific (Seoul)
-- **ap-southeast-1**: Asia Pacific (Singapore)
-
-### 지원 모델
-- **Claude 3**: Haiku, Sonnet, Opus
-- **Claude 3.5**: Haiku, Sonnet
-- **Claude 3.7**: Sonnet
-- **Claude 4**: Sonnet 4, Sonnet 4.5, Opus 4, Opus 4.1
 
 ---
 
