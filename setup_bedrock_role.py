@@ -19,7 +19,9 @@ def create_bedrock_roles():
         'CustomerServiceApp-BedrockRole',
         'DataAnalysisApp-BedrockRole',
         'ChatbotApp-BedrockRole',
-        'DocumentProcessorApp-BedrockRole'
+        'DocumentProcessorApp-BedrockRole',
+        'KoreaServiceApp-BedrockRole',
+        'SingaporeAnalyticsApp-BedrockRole'
     ]
 
     # 지원 리전 목록
@@ -39,7 +41,7 @@ def create_bedrock_roles():
         ]
     }
 
-    # Bedrock 사용 권한 정책 (모든 리전)
+    # Bedrock 사용 권한 정책 (모든 리전 + Cross Region Inference)
     bedrock_policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -52,6 +54,16 @@ def create_bedrock_roles():
                 ],
                 "Resource": [f"arn:aws:bedrock:{region}:{account_id}:*" for region in regions] + 
                            [f"arn:aws:bedrock:{region}::foundation-model/*" for region in regions] + ["*"]
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream"
+                ],
+                "Resource": [
+                    "arn:aws:bedrock:*:*:inference-profile/*"
+                ]
             },
             {
                 "Effect": "Allow",
@@ -101,8 +113,9 @@ def create_bedrock_roles():
                 PolicyName=policy_name,
                 PolicyDocument=json.dumps(bedrock_policy)
             )
-            print(f"  ✅ Added multi-region policy: {policy_name}")
+            print(f"  ✅ Added multi-region + cross-region inference policy: {policy_name}")
             print(f"  🌍 Regions: {', '.join(regions)}")
+            print(f"  🔗 Cross Region Inference: arn:aws:bedrock:*:*:inference-profile/*")
             print(f"  📁 S3 Access: bedrock-analytics-{account_id}-*, bedrock-logs-*")
 
             created_roles.append({
@@ -136,12 +149,13 @@ def create_bedrock_roles():
     print("\n" + "=" * 80)
     print("📋 Summary")
     print("=" * 80)
-    print(f"\nCreated/Updated {len(created_roles)} roles with multi-region support:\n")
+    print(f"\nCreated/Updated {len(created_roles)} roles with multi-region + cross-region inference support:\n")
 
     for role in created_roles:
         print(f"  • {role['name']}")
         print(f"    ARN: {role['arn']}")
         print(f"    Regions: {', '.join(regions)}")
+        print(f"    Cross Region Inference: ✅ Enabled")
         print(f"    S3 Access: bedrock-analytics-{account_id}-*, bedrock-logs-*\n")
 
     return created_roles
@@ -157,7 +171,9 @@ def cleanup_bedrock_roles():
         'CustomerServiceApp-BedrockRole',
         'DataAnalysisApp-BedrockRole',
         'ChatbotApp-BedrockRole',
-        'DocumentProcessorApp-BedrockRole'
+        'DocumentProcessorApp-BedrockRole',
+        'KoreaServiceApp-BedrockRole',
+        'SingaporeAnalyticsApp-BedrockRole'
     ]
 
     print("\n" + "=" * 80)
@@ -188,5 +204,17 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'cleanup':
         cleanup_bedrock_roles()
     else:
-        create_bedrock_roles()
-        print("\n💡 To cleanup these roles later, run: python setup_bedrock_role.py cleanup")
+        # IAM Role 생성 (시스템 제공 Inference Profile 사용)
+        roles = create_bedrock_roles()
+        
+        print("\n" + "=" * 80)
+        print("🎉 Setup Complete!")
+        print("=" * 80)
+        print("ℹ️  시스템 제공 Cross Region Inference Profile 사용:")
+        print("   • Claude 3.7: us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+        print("   • Claude 4.0: us.anthropic.claude-sonnet-4-20250514-v1:0")
+        print("   • Claude 4.5: us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        
+        print(f"\n✅ Created/Updated {len(roles)} IAM Roles with Cross Region permissions")
+        
+        print("\n💡 To cleanup these resources later, run: python setup_bedrock_role.py cleanup")
