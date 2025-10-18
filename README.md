@@ -248,11 +248,16 @@ python setup_athena_bucket.py
 - 오늘 날짜 파티션 자동 추가
 - 데이터 연결 테스트
 
-#### Step 2: Bedrock 로깅 설정 확인
+#### Step 2: Bedrock 로깅 설정
 ```bash
 python check_bedrock_logging.py
 ```
 현재 Model Invocation Logging 설정 상태를 확인합니다.
+
+```bash
+python setup_bedrock_logging.py
+```
+Bedrock Invocation Logging을 설정합니다.
 
 #### Step 3: IAM Role 권한 검증
 ```bash
@@ -373,39 +378,145 @@ def setup_region(region, account_id):
 
 ### 2. check_bedrock_logging.py
 
-**목적**: Bedrock Model Invocation Logging 설정 상태 확인
+**목적**: 다중 리전 Bedrock Model Invocation Logging 설정 상태 확인
 
-**주요 로직**:
+**주요 함수**:
+
+#### `check_logging_for_region(region)`
 ```python
-bedrock = boto3.client('bedrock', region_name='us-east-1')
+def check_logging_for_region(region):
+    bedrock = boto3.client('bedrock', region_name=region)
+    config = bedrock.get_model_invocation_logging_configuration()
 
-config = bedrock.get_model_invocation_logging_configuration()
-s3_config = config.get('loggingConfig', {}).get('s3Config', {})
+    s3_config = config.get('loggingConfig', {}).get('s3Config', {})
 
-if s3_config:
-    print(f"- S3 버킷: {s3_config.get('bucketName')}")
-    print(f"- 프리픽스: {s3_config.get('keyPrefix')}")
+    if s3_config:
+        bucket_name = s3_config.get('bucketName', 'N/A')
+        key_prefix = s3_config.get('keyPrefix', 'N/A')
 
-    # 버킷 리전 확인
-    location = s3.get_bucket_location(Bucket=bucket_name)
-    bucket_region = location['LocationConstraint'] or 'us-east-1'
+        # 버킷 리전 확인
+        s3 = boto3.client('s3')
+        location = s3.get_bucket_location(Bucket=bucket_name)
+        bucket_region = location['LocationConstraint'] or 'us-east-1'
+
+        return {
+            'enabled': True,
+            'bucket': bucket_name,
+            'prefix': key_prefix,
+            'bucket_region': bucket_region
+        }
 ```
+- 특정 리전의 Bedrock 로깅 설정 조회
+- S3 버킷, 키 프리픽스, 버킷 리전 정보 반환
+- 설정되지 않은 경우 enabled: False 반환
+
+#### `main()`
+```python
+def main():
+    regions = ['us-east-1', 'us-west-2', 'ap-northeast-1',
+               'ap-northeast-2', 'ap-southeast-1']
+
+    for region in regions:
+        results[region] = check_logging_for_region(region)
+```
+- 5개 주요 리전의 로깅 설정 확인
+- 각 리전별 설정 상태 요약 출력
 
 **출력 예시**:
 ```
-현재 Bedrock 로깅 설정:
-- S3 버킷: bedrock-logs-mycompany
-- 프리픽스: bedrock-logs/
-- 버킷 리전: us-east-1
+🔍 Checking Multi-Region Bedrock Model Invocation Logging Configuration
 
-다른 리전에서 동일한 설정 확인:
-- ap-northeast-2: bedrock-logs-mycompany
-- eu-west-1: bedrock-logs-mycompany
+Checking us-east-1...
+Checking us-west-2...
+Checking ap-northeast-1...
+
+📋 Summary
+us-east-1:
+  Status: ✅ Enabled
+  S3 Bucket: bedrock-logs-181136804328-us-east-1
+  Key Prefix: bedrock-logs/
+  Bucket Region: us-east-1
+
+us-west-2:
+  Status: ✅ Enabled
+  S3 Bucket: bedrock-logs-181136804328-us-west-2
+  Key Prefix: bedrock-logs/
+  Bucket Region: us-west-2
+
+ap-northeast-2:
+  Status: ❌ Not Configured
+  S3 Bucket: Not configured
+  Key Prefix: N/A
+  Bucket Region: N/A
 ```
 
 ---
 
-### 3. verify_bedrock_permissions.py
+### 3. setup_bedrock_logging.py
+
+**목적**: 다중 리전에 Model Invocation Logging 자동 설정
+
+**주요 함수**:
+
+#### `setup_logging_for_region(region, bucket_name)`
+```python
+def setup_logging_for_region(region, bucket_name):
+    bedrock = boto3.client('bedrock', region_name=region)
+
+    # 현재 설정 확인
+    current_config = bedrock.get_model_invocation_logging_configuration()
+
+    # 로깅 설정
+    response = bedrock.put_model_invocation_logging_configuration(
+        loggingConfig={
+            's3Config': {
+                'bucketName': bucket_name,
+                'keyPrefix': f'bedrock-logs/'
+            }
+        }
+    )
+
+    print(f"  ✅ Logging enabled: s3://{bucket_name}/bedrock-logs/")
+    return True
+```
+- 특정 리전의 Bedrock 클라이언트 생성
+- 현재 로깅 설정 확인
+- S3 기반 Model Invocation Logging 활성화
+- 로그는 `s3://{bucket_name}/bedrock-logs/` 경로에 저장
+
+#### `main()`
+```python
+def main():
+    regions = ['us-east-1', 'us-west-2', 'ap-northeast-1',
+               'ap-northeast-2', 'ap-southeast-1']
+    account_id = '181136804328'
+
+    for region in regions:
+        bucket_name = f'bedrock-logs-{account_id}-{region}'
+        results[region] = setup_logging_for_region(region, bucket_name)
+```
+- 5개 주요 리전에 대해 순회
+- 리전별 로그 버킷명 생성 (`bedrock-logs-{account_id}-{region}`)
+- 각 리전에 로깅 설정 적용
+- 결과 요약 출력
+
+**실행 결과 예시**:
+```
+🔧 Setting up Multi-Region Model Invocation Logging
+Setting up logging for us-east-1 -> bedrock-logs-181136804328-us-east-1...
+  ✅ Logging enabled: s3://bedrock-logs-181136804328-us-east-1/bedrock-logs/
+
+Setting up logging for us-west-2 -> bedrock-logs-181136804328-us-west-2...
+  ✅ Logging enabled: s3://bedrock-logs-181136804328-us-west-2/bedrock-logs/
+
+📋 Summary
+us-east-1: ✅ Success -> s3://bedrock-logs-181136804328-us-east-1/bedrock-logs/
+us-west-2: ✅ Success -> s3://bedrock-logs-181136804328-us-west-2/bedrock-logs/
+```
+
+---
+
+### 4. verify_bedrock_permissions.py
 
 **목적**: IAM Role의 다중 리전 Bedrock 권한 검증
 
@@ -465,7 +576,7 @@ Testing role: CustomerServiceApp-BedrockRole
 
 ---
 
-### 4. generate_test_data.py
+### 5. generate_test_data.py
 
 **목적**: 다중 리전에서 여러 애플리케이션 시뮬레이션을 통한 테스트 데이터 생성
 
@@ -561,7 +672,7 @@ def call_bedrock_with_useragent(scenario):
 
 ---
 
-### 5. bedrock_tracker.py
+### 6. bedrock_tracker.py
 
 **목적**: Athena 기반 실시간 사용량 분석 대시보드
 
@@ -848,8 +959,7 @@ def main():
 
 ### 시스템 데모 영상
 
-<!-- YouTube 영상 URL을 여기에 추가하세요 -->
-[![Bedrock Usage Analytics Demo]](https://youtu.be/zWQ5dvICrAQ)
+[![Bedrock Usage Analytics Demo](http://img.youtube.com/vi/zWQ5dvICrAQ/0.jpg)](https://youtu.be/zWQ5dvICrAQ)
 
 **데모 영상에서 확인할 수 있는 내용**:
 - 초기 환경 설정 과정
