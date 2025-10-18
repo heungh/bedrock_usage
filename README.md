@@ -1,6 +1,162 @@
 # AWS Bedrock Usage Analytics System
 
+## 🎯 애플리케이션별 Bedrock 사용량 추적
+
+### 왜 필요한가?
+
+여러 애플리케이션이 동일한 AWS 계정에서 Bedrock을 사용하는 경우, **어떤 애플리케이션이 얼마나 사용하는지** 파악하는 것이 중요합니다:
+
+- **비용 배분**: 각 팀/프로젝트별로 정확한 비용 청구
+- **최적화**: 비용이 많이 드는 애플리케이션 식별 및 최적화
+- **예산 관리**: 애플리케이션별 예산 할당 및 모니터링
+- **거버넌스**: 사용 패턴 분석 및 정책 수립
+
+### 왜 이 방법인가?
+
+Bedrock 사용량을 추적하는 방법에는 여러 가지가 있지만, 각각 한계가 있습니다:
+
+| 방법 | 장점 | 단점 | 정확도 |
+|------|------|------|--------|
+| **애플리케이션 코드 직접 로깅** | 커스터마이징 가능 | 모든 앱 수정 필요, 유지보수 부담 | ⭐⭐⭐ |
+| **CloudWatch Metrics만 사용** | 설정 간단 | 애플리케이션별 구분 불가 | ⭐⭐ |
+| **CloudTrail 수동 분석** | 상세한 정보 | 실시간 분석 어려움, 쿼리 복잡 | ⭐⭐⭐⭐ |
+| **Model Invocation Logging + Athena** ✅ | 코드 수정 불필요, 자동화, 확장성 | 초기 설정 필요 | ⭐⭐⭐⭐⭐ |
+
+* CloudTrail 안에는 Bedrock api 기록이 있어 호출한 횟수, 모델명을 알수 있지만, 토큰사용량은 나와있지 않습니다. 
+  CloudTrail과 Cloudwatch metric을 조합하는 방식으로 계산해도 명확하게 둘 간의 연결고리를 찾기 어렵기 때문에, CloudTrail에서 
+  호출한 횟수와, Cloudwatch metrci의 전체 토큰사용량을 호출횟수 비율로 나눠보기도 했는데, 실제 토큰 사용량과는 괴리가 있어 
+  정확한 사용량을 추정하기 어렵습니다. 
+
+**이 시스템의 접근 방법**:
+- ✅ **애플리케이션 코드 수정 불필요** - Bedrock API 호출만으로 자동 추적
+- ✅ **100% 정확한 토큰 및 비용 계산** - Model Invocation Logging에서 실제 데이터 추출
+- ✅ **실시간 SQL 분석** - Athena로 복잡한 분석 쿼리 실행 가능
+- ✅ **확장 가능** - 새 애플리케이션 추가 시 IAM Role만 생성하면 자동 추적
+
+### 전제조건: IAM Role 기반 애플리케이션 구분
+
+애플리케이션별로 사용량을 추적하려면, **각 애플리케이션에 전용 IAM Role을 부여**해야 합니다.
+
+#### IAM Role 네이밍 규칙
+```
+{ApplicationName}-BedrockRole
+```
+
+예시:
+- `CustomerServiceApp-BedrockRole`
+- `DataAnalysisApp-BedrockRole`
+- `ChatbotApp-BedrockRole`
+
+#### IAM Role 생성 예시 (Terraform)
+
+```hcl
+# Application별 IAM Role 생성
+resource "aws_iam_role" "customer_service_bedrock_role" {
+  name = "CustomerServiceApp-BedrockRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"  # 또는 실제 서비스
+        }
+      }
+    ]
+  })
+}
+
+# Bedrock 권한 부여
+resource "aws_iam_role_policy" "customer_service_bedrock_policy" {
+  name = "bedrock-invoke-policy"
+  role = aws_iam_role.customer_service_bedrock_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream"
+        ]
+        Resource = [
+          "arn:aws:bedrock:*::foundation-model/anthropic.claude-*"
+        ]
+      }
+    ]
+  })
+}
+```
+
+#### 애플리케이션에서 IAM Role 사용
+
+```python
+# Application 코드에서 Role Assume
+import boto3
+
+# STS로 Role Assume
+sts_client = boto3.client('sts')
+assumed_role = sts_client.assume_role(
+    RoleArn='arn:aws:iam::123456789012:role/CustomerServiceApp-BedrockRole',
+    RoleSessionName='customer-service-session'
+)
+
+# Assumed Role로 Bedrock 호출
+bedrock_client = boto3.client(
+    'bedrock-runtime',
+    aws_access_key_id=assumed_role['Credentials']['AccessKeyId'],
+    aws_secret_access_key=assumed_role['Credentials']['SecretAccessKey'],
+    aws_session_token=assumed_role['Credentials']['SessionToken']
+)
+
+# Bedrock API 호출 - 자동으로 추적됨!
+response = bedrock_client.invoke_model(
+    modelId='anthropic.claude-3-5-sonnet-20241022-v2:0',
+    body=json.dumps({...})
+)
+```
+
+#### 추적 원리
+
+1. **애플리케이션이 IAM Role로 Bedrock 호출**
+2. **Model Invocation Logging이 S3에 로그 저장**
+   - IAM Role ARN이 로그에 포함됨
+   - 실제 토큰 사용량이 기록됨
+3. **Athena가 로그에서 Role ARN 파싱**
+   - `assumed-role/CustomerServiceApp-BedrockRole/session` → `CustomerServiceApp`
+4. **애플리케이션별 사용량 및 비용 자동 집계**
+
+#### 대안: UserAgent 기반 구분 (코드 수정 필요)
+
+IAM Role을 사용할 수 없는 경우, UserAgent로도 구분 가능:
+
+```python
+from botocore.config import Config
+
+# UserAgent에 Application 식별 정보 추가
+config = Config(user_agent_extra='CustomerServiceApp/1.0')
+
+bedrock_client = boto3.client(
+    'bedrock-runtime',
+    config=config
+)
+```
+
+하지만 **IAM Role 방식이 더 권장됩니다**:
+- 보안: 명확한 권한 분리
+- 신뢰성: 조작 불가능
+- 관리: 중앙 집중식 관리
+
+---
+
 ## 목차
+- [애플리케이션별 Bedrock 사용량 추적](#-애플리케이션별-bedrock-사용량-추적)
+  - [왜 필요한가?](#왜-필요한가)
+  - [왜 이 방법인가?](#왜-이-방법인가)
+  - [전제조건: IAM Role 기반 애플리케이션 구분](#전제조건-iam-role-기반-애플리케이션-구분)
 - [애플리케이션 개요](#애플리케이션-개요)
 - [핵심 기능](#핵심-기능)
 - [시스템 아키텍처](#시스템-아키텍처)
@@ -271,13 +427,38 @@ python generate_test_data.py
 ```
 다양한 애플리케이션과 리전에서 샘플 Bedrock API 호출을 생성합니다.
 
-#### Step 5: Streamlit 대시보드 실행
+#### Step 5: 분석 도구 실행
+
+**옵션 A: Streamlit 대시보드 (웹 UI)**
 ```bash
 streamlit run bedrock_tracker.py
 ```
-웹 브라우저가 자동으로 열리며 대시보드에 접속됩니다.
+웹 브라우저가 자동으로 열리며 인터랙티브 대시보드에 접속됩니다.
 
-### 대시보드 사용법
+**옵션 B: CLI 도구 (터미널)**
+```bash
+# 기본 사용 (최근 7일, us-east-1, 터미널 출력)
+python bedrock_tracker_cli.py
+
+# 특정 리전 및 기간 지정
+python bedrock_tracker_cli.py --region ap-northeast-2 --days 30
+
+# 날짜 범위 직접 지정
+python bedrock_tracker_cli.py --start-date 2025-10-01 --end-date 2025-10-18
+
+# 특정 분석만 실행
+python bedrock_tracker_cli.py --analysis user        # 사용자별 분석만
+python bedrock_tracker_cli.py --analysis model       # 모델별 분석만
+python bedrock_tracker_cli.py --analysis daily       # 일별 패턴만
+
+# CSV 파일로 저장
+python bedrock_tracker_cli.py --format csv --region us-east-1
+
+# JSON 파일로 저장
+python bedrock_tracker_cli.py --format json
+```
+
+### Streamlit 대시보드 사용법
 
 1. **리전 선택**
    - 사이드바에서 분석할 AWS 리전 선택
@@ -294,6 +475,118 @@ streamlit run bedrock_tracker.py
    - 애플리케이션별 상세 분석: Role 기반 앱별 통계
    - 모델별 사용 통계: 모델 호출 비율
    - 시간 패턴 분석: 일별/시간별 차트
+
+### CLI 도구 사용법
+
+**기본 옵션**:
+```bash
+--days N              # 분석할 일수 (기본값: 7일)
+--region REGION       # AWS 리전 (기본값: us-east-1)
+--start-date DATE     # 시작 날짜 (YYYY-MM-DD)
+--end-date DATE       # 종료 날짜 (YYYY-MM-DD)
+--analysis TYPE       # 분석 유형 (all, summary, user, user-app, model, daily, hourly)
+--format FORMAT       # 출력 형식 (terminal, csv, json)
+--max-rows N          # 테이블 최대 행 수 (기본값: 20)
+```
+
+**사용 예시**:
+
+1. **전체 분석 (기본)**
+```bash
+python bedrock_tracker_cli.py
+```
+출력: 터미널에 전체 분석 결과 테이블 형식으로 표시
+
+2. **특정 리전 및 기간 분석**
+```bash
+python bedrock_tracker_cli.py --region ap-northeast-2 --days 30
+```
+출력: Seoul 리전의 최근 30일 데이터 분석
+
+3. **날짜 범위 직접 지정**
+```bash
+python bedrock_tracker_cli.py --start-date 2025-10-01 --end-date 2025-10-18
+```
+출력: 지정된 기간의 데이터 분석
+
+4. **특정 분석만 실행**
+```bash
+# 요약만
+python bedrock_tracker_cli.py --analysis summary
+
+# 사용자별 분석만
+python bedrock_tracker_cli.py --analysis user
+
+# 유저별 애플리케이션별 상세 분석
+python bedrock_tracker_cli.py --analysis user-app
+
+# 모델별 분석만
+python bedrock_tracker_cli.py --analysis model
+
+# 일별 패턴만
+python bedrock_tracker_cli.py --analysis daily
+
+# 시간별 패턴만
+python bedrock_tracker_cli.py --analysis hourly
+```
+
+5. **CSV 파일로 저장**
+```bash
+python bedrock_tracker_cli.py --format csv
+```
+출력: `./report/` 디렉토리에 CSV 파일 저장
+
+6. **JSON 파일로 저장**
+```bash
+python bedrock_tracker_cli.py --format json
+```
+출력: `./report/` 디렉토리에 JSON 파일 저장
+
+7. **복합 옵션 사용**
+```bash
+# Tokyo 리전, 최근 14일, 사용자별 분석, CSV 저장
+python bedrock_tracker_cli.py --region ap-northeast-1 --days 14 --analysis user --format csv
+
+# 특정 기간, 모델별 분석, 최대 50개 행 표시
+python bedrock_tracker_cli.py --start-date 2025-10-01 --end-date 2025-10-18 --analysis model --max-rows 50
+```
+
+**출력 예시 (터미널)**:
+```
+🚀 Bedrock Analytics CLI (Athena 기반)
+================================================================================
+📅 분석 기간: 2025-10-11 ~ 2025-10-18
+🌍 리전: ap-northeast-2 (Asia Pacific (Seoul))
+📋 분석 유형: all
+📄 출력 형식: terminal
+
+🔍 Model Invocation Logging 설정 확인 중...
+✅ Model Invocation Logging이 활성화되어 있습니다!
+   S3 버킷: bedrock-logs-181136804328-ap-northeast-2
+   프리픽스: bedrock-logs/
+
+📊 데이터 분석 중...
+
+================================================================================
+                            📊 전체 요약
+================================================================================
+  총 API 호출:                      12
+  총 Input 토큰:                   566
+  총 Output 토큰:                1,210
+  총 비용 (USD):              $0.0016
+================================================================================
+
+================================================================================
+                    👥 사용자/애플리케이션별 분석
+================================================================================
+user_or_app            call_count  total_input_tokens  total_output_tokens  estimated_cost_usd
+CustomerServiceApp             5                 230                  510              0.0007
+DataAnalysisApp                4                 200                  450              0.0006
+user/heungsu                   3                 136                  250              0.0003
+================================================================================
+
+✅ 분석 완료!
+```
 
 ---
 
@@ -871,6 +1164,167 @@ def main():
         # 차트 표시
         fig = px.bar(user_df.head(10), x="user_or_app", y="estimated_cost_usd")
         st.plotly_chart(fig, use_container_width=True)
+```
+
+---
+
+### 7. bedrock_tracker_cli.py
+
+**목적**: 터미널에서 사용 가능한 CLI 기반 Bedrock 사용량 분석 도구
+
+**bedrock_tracker.py와의 차이점**:
+- 웹 UI 대신 터미널 출력
+- 다양한 출력 형식 지원 (terminal, csv, json)
+- 명령줄 인자를 통한 유연한 옵션 제어
+- 스크립트 및 자동화에 적합
+
+**주요 클래스**: `BedrockAthenaTracker` (bedrock_tracker.py와 동일)
+
+#### 명령줄 인자 파싱
+```python
+def main():
+    parser = argparse.ArgumentParser(description='Bedrock Usage Tracker CLI - Athena 기반')
+    parser.add_argument('--days', type=int, default=7, help='분석할 일수')
+    parser.add_argument('--region', default='us-east-1',
+                       choices=list(REGIONS.keys()), help='AWS 리전')
+    parser.add_argument('--start-date', help='시작 날짜 (YYYY-MM-DD)')
+    parser.add_argument('--end-date', help='종료 날짜 (YYYY-MM-DD)')
+    parser.add_argument('--analysis',
+                       choices=['all', 'summary', 'user', 'user-app', 'model', 'daily', 'hourly'],
+                       default='all', help='분석 유형')
+    parser.add_argument('--format',
+                       choices=['terminal', 'csv', 'json'],
+                       default='terminal', help='출력 형식')
+    parser.add_argument('--max-rows', type=int, default=20,
+                       help='테이블 최대 행 수')
+```
+- 날짜 범위: `--days`, `--start-date`, `--end-date`로 유연하게 지정
+- 분석 유형: 필요한 분석만 선택적으로 실행
+- 출력 형식: 터미널/CSV/JSON 선택
+
+#### 터미널 출력 함수
+```python
+def print_summary(summary: Dict):
+    """전체 요약 출력"""
+    print("\n" + "="*80)
+    print("📊 전체 요약".center(80))
+    print("="*80)
+    print(f"  총 API 호출:       {summary['total_calls']:>15,}")
+    print(f"  총 Input 토큰:     {summary['total_input_tokens']:>15,}")
+    print(f"  총 Output 토큰:    {summary['total_output_tokens']:>15,}")
+    print(f"  총 비용 (USD):     ${summary['total_cost_usd']:>14.4f}")
+    print("="*80 + "\n")
+
+def print_dataframe_table(df: pd.DataFrame, title: str, max_rows: int = 20):
+    """DataFrame을 테이블 형식으로 출력"""
+    print(f"\n{'='*80}")
+    print(f"{title}".center(80))
+    print("="*80)
+
+    pd.set_option('display.max_rows', max_rows)
+    pd.set_option('display.width', 1000)
+
+    print(df.head(max_rows).to_string(index=False))
+
+    if len(df) > max_rows:
+        print(f"\n... ({len(df) - max_rows} more rows)")
+```
+- 깔끔한 테이블 형식 출력
+- 행 수 제한으로 가독성 확보
+
+#### 파일 저장 함수
+```python
+def save_to_csv(df: pd.DataFrame, filename: str):
+    """CSV로 저장"""
+    report_dir = Path(__file__).parent / 'report'
+    report_dir.mkdir(exist_ok=True)
+
+    filepath = report_dir / filename
+    df.to_csv(filepath, index=False, encoding='utf-8-sig')
+    print(f"✅ CSV 저장: {filepath}")
+
+def save_to_json(data: dict, filename: str):
+    """JSON으로 저장"""
+    report_dir = Path(__file__).parent / 'report'
+    report_dir.mkdir(exist_ok=True)
+
+    filepath = report_dir / filename
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print(f"✅ JSON 저장: {filepath}")
+```
+- `./report/` 디렉토리에 결과 저장
+- UTF-8 인코딩으로 한글 지원
+
+#### 분석 실행 로직
+```python
+# 데이터 수집
+results = {}
+
+if args.analysis in ['all', 'summary']:
+    summary = tracker.get_total_summary(start_date, end_date)
+    results['summary'] = summary
+
+if args.analysis in ['all', 'user']:
+    user_df = tracker.get_user_cost_analysis(start_date, end_date)
+    # 숫자 변환 및 비용 계산
+    user_df['estimated_cost_usd'] = (
+        user_df['total_input_tokens'] * 0.00025 / 1000 +
+        user_df['total_output_tokens'] * 0.00125 / 1000
+    )
+    results['user'] = user_df
+
+# ... 다른 분석들도 동일한 패턴
+
+# 출력 형식에 따라 결과 출력
+if args.format == 'terminal':
+    if 'summary' in results:
+        print_summary(results['summary'])
+    if 'user' in results:
+        print_dataframe_table(results['user'], "👥 사용자별 분석")
+
+elif args.format == 'csv':
+    for key, data in results.items():
+        if isinstance(data, pd.DataFrame):
+            save_to_csv(data, f"bedrock_{key}_{timestamp}.csv")
+
+elif args.format == 'json':
+    save_to_json(results, f"bedrock_analysis_{timestamp}.json")
+```
+- 분석 유형에 따라 필요한 데이터만 수집
+- 출력 형식에 따라 다른 방식으로 결과 제공
+
+**사용 시나리오**:
+
+1. **일일 리포트 자동화**
+```bash
+#!/bin/bash
+# daily_report.sh
+python bedrock_tracker_cli.py \
+  --region ap-northeast-2 \
+  --days 1 \
+  --format csv
+
+# CSV 파일을 이메일로 전송
+mail -s "Bedrock Daily Report" admin@company.com < report/bedrock_*.csv
+```
+
+2. **특정 기간 비용 분석**
+```bash
+python bedrock_tracker_cli.py \
+  --start-date 2025-10-01 \
+  --end-date 2025-10-31 \
+  --analysis user \
+  --format json
+```
+
+3. **다중 리전 분석 스크립트**
+```bash
+#!/bin/bash
+for region in us-east-1 ap-northeast-1 ap-northeast-2; do
+  echo "Analyzing $region..."
+  python bedrock_tracker_cli.py --region $region --format csv
+done
 ```
 
 ---
