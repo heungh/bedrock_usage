@@ -231,12 +231,8 @@ class BedrockAthenaTracker:
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
         GROUP BY identity.arn
         ORDER BY call_count DESC
         """
@@ -263,12 +259,8 @@ class BedrockAthenaTracker:
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
         GROUP BY identity.arn, modelId
         ORDER BY user_or_app, call_count DESC
         """
@@ -278,24 +270,23 @@ class BedrockAthenaTracker:
     def get_hourly_usage_pattern(
         self, start_date: datetime, end_date: datetime
     ) -> pd.DataFrame:
-        """시간별 사용 패턴"""
+        """시간별 사용 패턴 - timestamp에서 hour 추출"""
         logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}")
 
         query = f"""
         SELECT
-            year, month, day, hour,
+            year,
+            month,
+            day,
+            date_format(from_iso8601_timestamp(timestamp), '%H') as hour,
             COUNT(*) as call_count,
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
-        GROUP BY year, month, day, hour
-        ORDER BY year, month, day, hour
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        GROUP BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
+        ORDER BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
         """
 
         return self.execute_athena_query(query)
@@ -313,12 +304,8 @@ class BedrockAthenaTracker:
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
         GROUP BY year, month, day
         ORDER BY year, month, day
         """
@@ -340,12 +327,8 @@ class BedrockAthenaTracker:
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
         GROUP BY modelId
         ORDER BY call_count DESC
         """
@@ -362,12 +345,8 @@ class BedrockAthenaTracker:
             SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
             SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
         FROM bedrock_invocation_logs
-        WHERE year >= '{start_date.year}'
-            AND month >= '{start_date.month:02d}'
-            AND day >= '{start_date.day:02d}'
-            AND year <= '{end_date.year}'
-            AND month <= '{end_date.month:02d}'
-            AND day <= '{end_date.day:02d}'
+        WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
+            BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
         """
 
         df = self.execute_athena_query(query)
@@ -651,40 +630,62 @@ def main():
                 )
 
                 # 숫자 컬럼 변환
-                daily_df["call_count"] = pd.to_numeric(
-                    daily_df["call_count"], errors="coerce"
-                ).fillna(0)
-                daily_df["total_input_tokens"] = pd.to_numeric(
-                    daily_df["total_input_tokens"], errors="coerce"
-                ).fillna(0)
-                daily_df["total_output_tokens"] = pd.to_numeric(
-                    daily_df["total_output_tokens"], errors="coerce"
-                ).fillna(0)
+                numeric_columns = ["call_count", "total_input_tokens", "total_output_tokens"]
+                for col in numeric_columns:
+                    if col in daily_df.columns:
+                        daily_df[col] = pd.to_numeric(
+                            daily_df[col], errors="coerce"
+                        ).fillna(0)
 
+                # 표시용 DataFrame 생성 (날짜를 문자열로 포맷)
+                display_df = daily_df.copy()
+                display_df["날짜"] = display_df["date"].dt.strftime("%Y-%m-%d")
+                display_df = display_df[["날짜", "call_count", "total_input_tokens", "total_output_tokens"]]
+                display_df.columns = ["날짜", "API 호출 수", "Input 토큰", "Output 토큰"]
+
+                # 1. 테이블 먼저 표시
+                st.dataframe(display_df, use_container_width=True)
+
+                # 2. 그래프 표시
                 import plotly.express as px
+                import plotly.graph_objects as go
 
+                # 일별 API 호출 패턴
                 fig = px.line(
                     daily_df,
                     x="date",
                     y="call_count",
                     title="일별 API 호출 패턴",
                     labels={"date": "날짜", "call_count": "API 호출 수"},
+                    markers=True
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
                 # 일별 토큰 사용량
-                fig2 = px.line(
-                    daily_df,
-                    x="date",
-                    y=["total_input_tokens", "total_output_tokens"],
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=daily_df["date"],
+                    y=daily_df["total_input_tokens"],
+                    mode='lines+markers',
+                    name='Input 토큰',
+                    line=dict(color='blue')
+                ))
+                fig2.add_trace(go.Scatter(
+                    x=daily_df["date"],
+                    y=daily_df["total_output_tokens"],
+                    mode='lines+markers',
+                    name='Output 토큰',
+                    line=dict(color='red')
+                ))
+                fig2.update_layout(
                     title="일별 토큰 사용량",
-                    labels={
-                        "date": "날짜",
-                        "value": "토큰 수",
-                        "variable": "토큰 종류",
-                    },
+                    xaxis_title="날짜",
+                    yaxis_title="토큰 수",
+                    hovermode='x unified'
                 )
                 st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.warning("선택한 기간에 일별 사용 데이터가 없습니다.")
 
             # 시간대별 패턴
             st.header("⏰ 시간대별 사용 패턴")
@@ -705,20 +706,62 @@ def main():
                 )
 
                 # 숫자 컬럼 변환
-                hourly_df["call_count"] = pd.to_numeric(
-                    hourly_df["call_count"], errors="coerce"
-                ).fillna(0)
+                numeric_columns = ["call_count", "total_input_tokens", "total_output_tokens"]
+                for col in numeric_columns:
+                    if col in hourly_df.columns:
+                        hourly_df[col] = pd.to_numeric(
+                            hourly_df[col], errors="coerce"
+                        ).fillna(0)
 
+                # 표시용 DataFrame 생성
+                display_df = hourly_df.copy()
+                display_df["시간"] = display_df["datetime"].dt.strftime("%Y-%m-%d %H:00")
+                display_df = display_df[["시간", "call_count", "total_input_tokens", "total_output_tokens"]]
+                display_df.columns = ["시간", "API 호출 수", "Input 토큰", "Output 토큰"]
+
+                # 1. 테이블 먼저 표시
+                st.dataframe(display_df, use_container_width=True)
+
+                # 2. 그래프 표시
                 import plotly.express as px
+                import plotly.graph_objects as go
 
+                # 시간대별 API 호출 패턴
                 fig = px.line(
                     hourly_df,
                     x="datetime",
                     y="call_count",
                     title="시간대별 API 호출 패턴",
                     labels={"datetime": "시간", "call_count": "API 호출 수"},
+                    markers=True
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+                # 시간대별 토큰 사용량
+                fig2 = go.Figure()
+                fig2.add_trace(go.Scatter(
+                    x=hourly_df["datetime"],
+                    y=hourly_df["total_input_tokens"],
+                    mode='lines+markers',
+                    name='Input 토큰',
+                    line=dict(color='blue')
+                ))
+                fig2.add_trace(go.Scatter(
+                    x=hourly_df["datetime"],
+                    y=hourly_df["total_output_tokens"],
+                    mode='lines+markers',
+                    name='Output 토큰',
+                    line=dict(color='red')
+                ))
+                fig2.update_layout(
+                    title="시간대별 토큰 사용량",
+                    xaxis_title="시간",
+                    yaxis_title="토큰 수",
+                    hovermode='x unified'
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.warning("선택한 기간에 시간대별 사용 데이터가 없습니다.")
 
     else:
         # 초기 화면
