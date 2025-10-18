@@ -2,727 +2,771 @@ import streamlit as st
 import boto3
 import pandas as pd
 from datetime import datetime, timedelta
-import json
-from typing import Dict, List, Tuple
-
-class BedrockUsageTracker:
-    def __init__(self):
-        self.regions = ['us-east-1', 'us-west-2', 'eu-west-1', 'ap-northeast-1', 'ap-southeast-1']
-        # 실제 사용되는 모델은 CloudTrail에서 동적으로 추출합니다
-        self.discovered_models = set()
-        self.discovered_applications = set()
-        self.pricing = {
-            'us-east-1': {'input': 0.003, 'output': 0.015},
-            'us-west-2': {'input': 0.003, 'output': 0.015},
-            'eu-west-1': {'input': 0.0035, 'output': 0.0175},
-            'ap-northeast-1': {'input': 0.004, 'output': 0.02},
-            'ap-southeast-1': {'input': 0.004, 'output': 0.02}
-        }
-
-    def extract_model_id_from_event(self, event: Dict) -> str:
-        """CloudTrail 이벤트에서 모델 ID 추출"""
-        try:
-            # CloudTrailEvent는 JSON 문자열로 되어있을 수 있음
-            if 'CloudTrailEvent' in event:
-                event_data = json.loads(event['CloudTrailEvent'])
-                if 'requestParameters' in event_data and 'modelId' in event_data['requestParameters']:
-                    return event_data['requestParameters']['modelId']
-
-            # Resources에서도 확인
-            if 'Resources' in event:
-                for resource in event['Resources']:
-                    if resource.get('ResourceType') == 'AWS::Bedrock::Model':
-                        return resource.get('ResourceName', '')
-        except Exception as e:
-            pass
-        return 'Unknown'
-
-    def extract_token_usage_from_event(self, event: Dict) -> Dict[str, int]:
-        """CloudTrail 이벤트에서 실제 토큰 사용량 추출"""
-        try:
-            if 'CloudTrailEvent' in event:
-                event_data = json.loads(event['CloudTrailEvent'])
-
-                # responseElements에서 usage 정보 추출
-                if 'responseElements' in event_data:
-                    response_elements = event_data['responseElements']
-
-                    # Bedrock API 응답 구조에 따라 usage 정보 추출
-                    if 'usage' in response_elements:
-                        usage = response_elements['usage']
-                        return {
-                            'input_tokens': usage.get('inputTokens', 0),
-                            'output_tokens': usage.get('outputTokens', 0)
-                        }
-
-                    # 다른 가능한 구조 확인
-                    if 'inputTokenCount' in response_elements:
-                        return {
-                            'input_tokens': response_elements.get('inputTokenCount', 0),
-                            'output_tokens': response_elements.get('outputTokenCount', 0)
-                        }
-        except Exception as e:
-            pass
-
-        return {'input_tokens': 0, 'output_tokens': 0}
-
-    def extract_application_info(self, event: Dict) -> str:
-        """CloudTrail 이벤트에서 애플리케이션 정보 추출"""
-        try:
-            if 'CloudTrailEvent' in event:
-                event_data = json.loads(event['CloudTrailEvent'])
-
-                # 방법 1: IAM Role에서 추출 (가장 신뢰할 수 있음)
-                if 'userIdentity' in event_data:
-                    user_identity = event_data['userIdentity']
-
-                    # AssumedRole인 경우
-                    if user_identity.get('type') == 'AssumedRole':
-                        arn = user_identity.get('arn', '')
-                        # ARN 형식: arn:aws:sts::123456789012:assumed-role/AppName-BedrockRole/session
-                        if 'assumed-role' in arn:
-                            parts = arn.split('/')
-                            if len(parts) >= 2:
-                                role_name = parts[-2]  # Role 이름
-                                # Role 이름에서 Application 이름 추출
-                                # 예: "CustomerServiceApp-BedrockRole" -> "CustomerServiceApp"
-                                if '-BedrockRole' in role_name:
-                                    return role_name.replace('-BedrockRole', '')
-                                return role_name
-
-                # 방법 2: UserAgent에서 추출
-                user_agent = event_data.get('userAgent', '')
-                if user_agent:
-                    # UserAgent 형식: "aws-cli/2.x Python/3.x boto3/1.x botocore/1.x AppName/1.0"
-                    parts = user_agent.split()
-                    for part in parts:
-                        if '/' in part and not part.startswith(('aws-', 'Python/', 'boto', 'Boto', 'exec-env')):
-                            app_name = part.split('/')[0]
-                            # 일반적인 SDK 관련 문자열 제외
-                            if app_name not in ['botocore', 'urllib3', 'APN']:
-                                return app_name
-
-        except Exception as e:
-            pass
-
-        return 'Unknown'
-
-    def get_cloudtrail_events(self, regions: List[str], start_time: datetime, end_time: datetime) -> List[Dict]:
-        events = []
-        event_names = ['InvokeModel', 'InvokeModelWithResponseStream']
-
-        for region in regions:
-            try:
-                client = boto3.client('cloudtrail', region_name=region)
-
-                # CloudTrail lookup_events는 한 번에 하나의 AttributeKey만 지원
-                # 각 EventName별로 별도 조회
-                for event_name in event_names:
-                    try:
-                        response = client.lookup_events(
-                            LookupAttributes=[
-                                {'AttributeKey': 'EventName', 'AttributeValue': event_name}
-                            ],
-                            StartTime=start_time,
-                            EndTime=end_time,
-                            MaxResults=50  # 페이지네이션 필요시 조정
-                        )
-
-                        for event in response['Events']:
-                            model_id = self.extract_model_id_from_event(event)
-                            if model_id and model_id != 'Unknown':
-                                self.discovered_models.add(model_id)
-
-                            # 토큰 사용량 추출
-                            token_usage = self.extract_token_usage_from_event(event)
-
-                            # 애플리케이션 정보 추출
-                            application = self.extract_application_info(event)
-                            if application and application != 'Unknown':
-                                self.discovered_applications.add(application)
-
-                            events.append({
-                                'region': region,
-                                'time': event['EventTime'],
-                                'user': event.get('Username', 'Unknown'),
-                                'event_name': event['EventName'],
-                                'model_id': model_id,
-                                'application': application,
-                                'input_tokens': token_usage['input_tokens'],
-                                'output_tokens': token_usage['output_tokens'],
-                                'has_token_data': token_usage['input_tokens'] > 0 or token_usage['output_tokens'] > 0,
-                                'resources': event.get('Resources', []),
-                                'cloud_trail_event': event
-                            })
-                    except Exception as e:
-                        st.warning(f"Error fetching {event_name} in {region}: {str(e)}")
-
-            except Exception as e:
-                st.error(f"CloudTrail error in {region}: {str(e)}")
-
-        return events
-
-    def get_cloudwatch_metrics(self, regions: List[str], model_ids: List[str], start_time: datetime, end_time: datetime) -> Dict:
-        """실제 사용된 모델 ID로 CloudWatch 메트릭 조회"""
-        metrics_data = {}
-
-        for region in regions:
-            try:
-                client = boto3.client('cloudwatch', region_name=region)
-                metrics_data[region] = {}
-
-                for model_id in model_ids:
-                    try:
-                        # Input tokens
-                        input_response = client.get_metric_statistics(
-                            Namespace='AWS/Bedrock',
-                            MetricName='InputTokenCount',
-                            Dimensions=[{'Name': 'ModelId', 'Value': model_id}],
-                            StartTime=start_time,
-                            EndTime=end_time,
-                            Period=3600,
-                            Statistics=['Sum']
-                        )
-
-                        # Output tokens
-                        output_response = client.get_metric_statistics(
-                            Namespace='AWS/Bedrock',
-                            MetricName='OutputTokenCount',
-                            Dimensions=[{'Name': 'ModelId', 'Value': model_id}],
-                            StartTime=start_time,
-                            EndTime=end_time,
-                            Period=3600,
-                            Statistics=['Sum']
-                        )
-
-                        input_sum = sum([point['Sum'] for point in input_response['Datapoints']])
-                        output_sum = sum([point['Sum'] for point in output_response['Datapoints']])
-
-                        # 토큰이 있는 경우만 저장
-                        if input_sum > 0 or output_sum > 0:
-                            metrics_data[region][model_id] = {
-                                'input_tokens': input_sum,
-                                'output_tokens': output_sum
-                            }
-                    except Exception as e:
-                        st.warning(f"CloudWatch error for model {model_id} in {region}: {str(e)}")
-
-            except Exception as e:
-                st.error(f"CloudWatch error in {region}: {str(e)}")
-
-        return metrics_data
-
-    def calculate_costs(self, metrics_data: Dict) -> pd.DataFrame:
-        """메트릭 데이터를 기반으로 비용 계산"""
-        cost_data = []
-        for region, models in metrics_data.items():
-            region_pricing = self.pricing.get(region, self.pricing['us-east-1'])
-            for model_id, tokens in models.items():
-                input_cost = (tokens['input_tokens'] / 1000) * region_pricing['input']
-                output_cost = (tokens['output_tokens'] / 1000) * region_pricing['output']
-                total_cost = input_cost + output_cost
-
-                cost_data.append({
-                    'Region': region,
-                    'Model ID': model_id,
-                    'Input Tokens': int(tokens['input_tokens']),
-                    'Output Tokens': int(tokens['output_tokens']),
-                    'Input Cost ($)': round(input_cost, 4),
-                    'Output Cost ($)': round(output_cost, 4),
-                    'Total Cost ($)': round(total_cost, 4)
-                })
-
-        return pd.DataFrame(cost_data)
-
-    def analyze_user_usage(self, events: List[Dict]) -> pd.DataFrame:
-        """사용자별 모델 사용량 분석"""
-        user_data = {}
-
-        for event in events:
-            user = event['user']
-            model_id = event['model_id']
-            region = event['region']
-
-            key = f"{user}|{model_id}|{region}"
-            if key not in user_data:
-                user_data[key] = {
-                    'User': user,
-                    'Model ID': model_id,
-                    'Region': region,
-                    'Invocation Count': 0
-                }
-            user_data[key]['Invocation Count'] += 1
-
-        df = pd.DataFrame(list(user_data.values()))
-        return df.sort_values(by='Invocation Count', ascending=False) if not df.empty else df
-
-    def calculate_user_costs(self, events: List[Dict], metrics_data: Dict) -> Tuple[pd.DataFrame, str]:
-        """사용자별 토큰 사용량과 비용 계산 (실제 토큰 우선, 없으면 추정)"""
-        user_cost_data = []
-
-        # CloudTrail에 토큰 데이터가 있는지 확인
-        events_with_tokens = [e for e in events if e.get('has_token_data', False)]
-        has_actual_token_data = len(events_with_tokens) > 0
-
-        if has_actual_token_data:
-            # 방법 1: CloudTrail에서 실제 토큰 데이터 사용 (가장 정확)
-            user_data = {}
-
-            for event in events:
-                user = event['user']
-                region = event['region']
-                model_id = event['model_id']
-                user_key = f"{user}|{region}|{model_id}"
-
-                if user_key not in user_data:
-                    user_data[user_key] = {
-                        'user': user,
-                        'region': region,
-                        'model_id': model_id,
-                        'count': 0,
-                        'input_tokens': 0,
-                        'output_tokens': 0
-                    }
-
-                user_data[user_key]['count'] += 1
-                user_data[user_key]['input_tokens'] += event.get('input_tokens', 0)
-                user_data[user_key]['output_tokens'] += event.get('output_tokens', 0)
-
-            for user_key, data in user_data.items():
-                region_pricing = self.pricing.get(data['region'], self.pricing['us-east-1'])
-                input_cost = (data['input_tokens'] / 1000) * region_pricing['input']
-                output_cost = (data['output_tokens'] / 1000) * region_pricing['output']
-                total_cost = input_cost + output_cost
-
-                user_cost_data.append({
-                    'User': data['user'],
-                    'Region': data['region'],
-                    'Model ID': data['model_id'],
-                    'Invocation Count': data['count'],
-                    'Input Tokens': int(data['input_tokens']),
-                    'Output Tokens': int(data['output_tokens']),
-                    'Input Cost ($)': round(input_cost, 4),
-                    'Output Cost ($)': round(output_cost, 4),
-                    'Total Cost ($)': round(total_cost, 4),
-                    'Data Source': 'CloudTrail (Actual)'
-                })
-
-            calculation_method = "actual"
-
-        else:
-            # 방법 2: CloudWatch 메트릭을 호출 비율로 분배 (추정)
-            total_calls = {}
-            user_calls = {}
-
-            for event in events:
-                user = event['user']
-                model_id = event['model_id']
-                region = event['region']
-                key = f"{region}|{model_id}"
-
-                if key not in total_calls:
-                    total_calls[key] = 0
-                total_calls[key] += 1
-
-                user_key = f"{user}|{region}|{model_id}"
-                if user_key not in user_calls:
-                    user_calls[user_key] = {
-                        'user': user,
-                        'region': region,
-                        'model_id': model_id,
-                        'count': 0
-                    }
-                user_calls[user_key]['count'] += 1
-
-            for user_key, user_info in user_calls.items():
-                user = user_info['user']
-                region = user_info['region']
-                model_id = user_info['model_id']
-                user_count = user_info['count']
-
-                key = f"{region}|{model_id}"
-                total_count = total_calls.get(key, 1)
-                ratio = user_count / total_count if total_count > 0 else 0
-
-                if region in metrics_data and model_id in metrics_data[region]:
-                    tokens = metrics_data[region][model_id]
-                    user_input_tokens = tokens['input_tokens'] * ratio
-                    user_output_tokens = tokens['output_tokens'] * ratio
-
-                    region_pricing = self.pricing.get(region, self.pricing['us-east-1'])
-                    input_cost = (user_input_tokens / 1000) * region_pricing['input']
-                    output_cost = (user_output_tokens / 1000) * region_pricing['output']
-                    total_cost = input_cost + output_cost
-
-                    user_cost_data.append({
-                        'User': user,
-                        'Region': region,
-                        'Model ID': model_id,
-                        'Invocation Count': user_count,
-                        'Call Ratio (%)': round(ratio * 100, 2),
-                        'Est. Input Tokens': int(user_input_tokens),
-                        'Est. Output Tokens': int(user_output_tokens),
-                        'Input Cost ($)': round(input_cost, 4),
-                        'Output Cost ($)': round(output_cost, 4),
-                        'Total Cost ($)': round(total_cost, 4),
-                        'Data Source': 'CloudWatch (Estimated)'
-                    })
-
-            calculation_method = "estimated"
-
-        df = pd.DataFrame(user_cost_data)
-        return (df.sort_values(by='Total Cost ($)', ascending=False) if not df.empty else df), calculation_method
-
-    def calculate_application_costs(self, events: List[Dict], metrics_data: Dict) -> Tuple[pd.DataFrame, str]:
-        """애플리케이션별 토큰 사용량과 비용 계산 (실제 토큰 우선, 없으면 추정)"""
-        app_cost_data = []
-
-        # CloudTrail에 토큰 데이터가 있는지 확인
-        events_with_tokens = [e for e in events if e.get('has_token_data', False)]
-        has_actual_token_data = len(events_with_tokens) > 0
-
-        if has_actual_token_data:
-            # 방법 1: CloudTrail에서 실제 토큰 데이터 사용 (가장 정확)
-            app_data = {}
-
-            for event in events:
-                application = event.get('application', 'Unknown')
-                region = event['region']
-                model_id = event['model_id']
-                app_key = f"{application}|{region}|{model_id}"
-
-                if app_key not in app_data:
-                    app_data[app_key] = {
-                        'application': application,
-                        'region': region,
-                        'model_id': model_id,
-                        'count': 0,
-                        'input_tokens': 0,
-                        'output_tokens': 0
-                    }
-
-                app_data[app_key]['count'] += 1
-                app_data[app_key]['input_tokens'] += event.get('input_tokens', 0)
-                app_data[app_key]['output_tokens'] += event.get('output_tokens', 0)
-
-            for app_key, data in app_data.items():
-                region_pricing = self.pricing.get(data['region'], self.pricing['us-east-1'])
-                input_cost = (data['input_tokens'] / 1000) * region_pricing['input']
-                output_cost = (data['output_tokens'] / 1000) * region_pricing['output']
-                total_cost = input_cost + output_cost
-
-                app_cost_data.append({
-                    'Application': data['application'],
-                    'Region': data['region'],
-                    'Model ID': data['model_id'],
-                    'Invocation Count': data['count'],
-                    'Input Tokens': int(data['input_tokens']),
-                    'Output Tokens': int(data['output_tokens']),
-                    'Input Cost ($)': round(input_cost, 4),
-                    'Output Cost ($)': round(output_cost, 4),
-                    'Total Cost ($)': round(total_cost, 4),
-                    'Data Source': 'CloudTrail (Actual)'
-                })
-
-            calculation_method = "actual"
-
-        else:
-            # 방법 2: CloudWatch 메트릭을 호출 비율로 분배 (추정)
-            total_calls = {}
-            app_calls = {}
-
-            for event in events:
-                application = event.get('application', 'Unknown')
-                model_id = event['model_id']
-                region = event['region']
-                key = f"{region}|{model_id}"
-
-                if key not in total_calls:
-                    total_calls[key] = 0
-                total_calls[key] += 1
-
-                app_key = f"{application}|{region}|{model_id}"
-                if app_key not in app_calls:
-                    app_calls[app_key] = {
-                        'application': application,
-                        'region': region,
-                        'model_id': model_id,
-                        'count': 0
-                    }
-                app_calls[app_key]['count'] += 1
-
-            for app_key, app_info in app_calls.items():
-                application = app_info['application']
-                region = app_info['region']
-                model_id = app_info['model_id']
-                app_count = app_info['count']
-
-                key = f"{region}|{model_id}"
-                total_count = total_calls.get(key, 1)
-                ratio = app_count / total_count if total_count > 0 else 0
-
-                if region in metrics_data and model_id in metrics_data[region]:
-                    tokens = metrics_data[region][model_id]
-                    app_input_tokens = tokens['input_tokens'] * ratio
-                    app_output_tokens = tokens['output_tokens'] * ratio
-
-                    region_pricing = self.pricing.get(region, self.pricing['us-east-1'])
-                    input_cost = (app_input_tokens / 1000) * region_pricing['input']
-                    output_cost = (app_output_tokens / 1000) * region_pricing['output']
-                    total_cost = input_cost + output_cost
-
-                    app_cost_data.append({
-                        'Application': application,
-                        'Region': region,
-                        'Model ID': model_id,
-                        'Invocation Count': app_count,
-                        'Call Ratio (%)': round(ratio * 100, 2),
-                        'Est. Input Tokens': int(app_input_tokens),
-                        'Est. Output Tokens': int(app_output_tokens),
-                        'Input Cost ($)': round(input_cost, 4),
-                        'Output Cost ($)': round(output_cost, 4),
-                        'Total Cost ($)': round(total_cost, 4),
-                        'Data Source': 'CloudWatch (Estimated)'
-                    })
-
-            calculation_method = "estimated"
-
-        df = pd.DataFrame(app_cost_data)
-        return (df.sort_values(by='Total Cost ($)', ascending=False) if not df.empty else df), calculation_method
-
-def main():
-    st.set_page_config(page_title="Bedrock Usage Tracker", layout="wide")
-    st.title("🔍 Amazon Bedrock Usage Tracker")
-
-    tracker = BedrockUsageTracker()
-
-    # Sidebar
-    st.sidebar.header("Configuration")
-
-    selected_regions = st.sidebar.multiselect(
-        "Select Regions",
-        tracker.regions,
-        default=['us-east-1']
+import time
+from typing import Dict, List
+import logging
+import os
+from pathlib import Path
+
+
+# 로깅 설정
+def setup_logger():
+    """디버깅용 로거 설정"""
+    log_dir = Path(__file__).parent / "log"
+    log_dir.mkdir(exist_ok=True)
+
+    log_filename = (
+        log_dir / f"bedrock_tracker_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
     )
 
-    # Date range
+    logger = logging.getLogger("BedrockTracker")
+    logger.setLevel(logging.DEBUG)
+
+    # 파일 핸들러
+    file_handler = logging.FileHandler(log_filename, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+
+    # 포맷 설정
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+    )
+    file_handler.setFormatter(formatter)
+
+    logger.addHandler(file_handler)
+    logger.info(f"Logger initialized. Log file: {log_filename}")
+
+    return logger
+
+
+# 글로벌 로거
+logger = setup_logger()
+
+# AWS Bedrock 모델 가격 테이블 (모든 리전 동일)
+MODEL_PRICING = {
+    # Claude 3 모델
+    "claude-3-haiku-20240307": {
+        "input": 0.00025 / 1000,  # per token
+        "output": 0.00125 / 1000,
+    },
+    "claude-3-sonnet-20240229": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    "claude-3-opus-20240229": {"input": 0.015 / 1000, "output": 0.075 / 1000},
+    # Claude 3.5 모델
+    "claude-3-5-haiku-20241022": {"input": 0.0008 / 1000, "output": 0.004 / 1000},
+    "claude-3-5-sonnet-20240620": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    "claude-3-5-sonnet-20241022": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    # Claude 3.7 모델
+    "claude-3-7-sonnet-20250219": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    # Claude 4 모델
+    "claude-sonnet-4-20250514": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    "claude-sonnet-4-5-20250929": {"input": 0.003 / 1000, "output": 0.015 / 1000},
+    "claude-opus-4-20250514": {"input": 0.015 / 1000, "output": 0.075 / 1000},
+    "claude-opus-4-1-20250808": {"input": 0.015 / 1000, "output": 0.075 / 1000},
+}
+
+# 리전 설정
+REGIONS = {
+    "us-east-1": "US East (N. Virginia)",
+    "us-west-2": "US West (Oregon)",
+    "eu-central-1": "Europe (Frankfurt)",
+    "ap-northeast-1": "Asia Pacific (Tokyo)",
+    "ap-northeast-2": "Asia Pacific (Seoul)",
+    "ap-southeast-1": "Asia Pacific (Singapore)",
+}
+
+default_region = "us-east-1"
+
+
+def get_model_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    """모델별 비용 계산"""
+    logger.debug(
+        f"Calculating cost for model: {model_id}, input: {input_tokens}, output: {output_tokens}"
+    )
+
+    # 모델 ID에서 모델명 추출 (예: us.anthropic.claude-3-haiku-20240307-v1:0 -> claude-3-haiku-20240307)
+    model_name = model_id.split(".")[-1].split("-v")[0] if "." in model_id else model_id
+
+    # 가격 테이블에서 찾기
+    for key, pricing in MODEL_PRICING.items():
+        if key in model_name:
+            cost = (input_tokens * pricing["input"]) + (
+                output_tokens * pricing["output"]
+            )
+            logger.debug(f"Model: {key}, Cost: ${cost:.6f}")
+            return cost
+
+    # 기본 가격 (Claude 3 Haiku)
+    logger.warning(f"Unknown model: {model_id}, using default pricing")
+    default_cost = (input_tokens * 0.00025 / 1000) + (output_tokens * 0.00125 / 1000)
+    return default_cost
+
+
+class BedrockAthenaTracker:
+    def __init__(self, region=default_region):
+        logger.info(f"Initializing BedrockAthenaTracker with region: {region}")
+        self.region = region
+        self.athena = boto3.client("athena", region_name=region)
+        # STS 클라이언트도 region을 지정하여 생성
+        sts_client = boto3.client("sts", region_name=region)
+        self.account_id = sts_client.get_caller_identity()["Account"]
+        # 리전별 Athena 결과 저장용 버킷
+        self.results_bucket = f"bedrock-analytics-{self.account_id}-{self.region}"
+        logger.info(
+            f"Account ID: {self.account_id}, Results bucket: {self.results_bucket}"
+        )
+
+    def get_current_logging_config(self) -> Dict:
+        """현재 설정된 Model Invocation Logging 정보 조회"""
+        logger.info("Getting current logging configuration")
+        try:
+            bedrock = boto3.client("bedrock", region_name=self.region)
+            response = bedrock.get_model_invocation_logging_configuration()
+
+            if "loggingConfig" in response:
+                config = response["loggingConfig"]
+
+                if "s3Config" in config:
+                    result = {
+                        "type": "s3",
+                        "bucket": config["s3Config"].get("bucketName", ""),
+                        "prefix": config["s3Config"].get("keyPrefix", ""),
+                        "status": "enabled",
+                    }
+                    logger.info(f"Logging config: {result}")
+                    return result
+
+            logger.warning("Logging is disabled")
+            return {"status": "disabled"}
+
+        except Exception as e:
+            logger.error(f"Error getting logging config: {str(e)}")
+            return {"status": "error", "error": str(e)}
+
+    def set_results_bucket(self, bucket_name: str):
+        """Athena 결과 저장용 버킷 설정"""
+        self.results_bucket = bucket_name
+        logger.info(f"Results bucket set to: {self.results_bucket}")
+
+    def execute_athena_query(
+        self, query: str, database: str = "bedrock_analytics"
+    ) -> pd.DataFrame:
+        """Athena 쿼리 실행 및 결과 반환"""
+        logger.info(f"Executing Athena query on database: {database}")
+        logger.debug(f"Query: {query}")
+
+        try:
+            # 쿼리 실행
+            response = self.athena.start_query_execution(
+                QueryString=query,
+                QueryExecutionContext={"Database": database},
+                ResultConfiguration={
+                    "OutputLocation": f"s3://{self.results_bucket}/query-results/"
+                },
+            )
+
+            query_id = response["QueryExecutionId"]
+            logger.info(f"Query execution started: {query_id}")
+
+            # 쿼리 완료 대기
+            max_wait = 60
+            for i in range(max_wait):
+                result = self.athena.get_query_execution(QueryExecutionId=query_id)
+                status = result["QueryExecution"]["Status"]["State"]
+
+                if status == "SUCCEEDED":
+                    logger.info(f"Query succeeded in {i+1} seconds")
+                    break
+                elif status in ["FAILED", "CANCELLED"]:
+                    error = result["QueryExecution"]["Status"].get(
+                        "StateChangeReason", "Unknown error"
+                    )
+                    logger.error(f"Query failed: {error}")
+                    raise Exception(f"Query failed: {error}")
+
+                time.sleep(1)
+            else:
+                logger.error("Query timeout")
+                raise Exception("Query timeout")
+
+            # 결과 조회
+            result_response = self.athena.get_query_results(QueryExecutionId=query_id)
+
+            # DataFrame으로 변환
+            columns = [
+                col["Label"]
+                for col in result_response["ResultSet"]["ResultSetMetadata"][
+                    "ColumnInfo"
+                ]
+            ]
+            rows = []
+
+            for row in result_response["ResultSet"]["Rows"][1:]:  # 헤더 제외
+                row_data = [field.get("VarCharValue", "") for field in row["Data"]]
+                rows.append(row_data)
+
+            df = pd.DataFrame(rows, columns=columns)
+            logger.info(f"Query returned {len(df)} rows")
+            return df
+
+        except Exception as e:
+            logger.error(f"Athena query execution failed: {str(e)}")
+            st.error(f"Athena 쿼리 실행 실패: {str(e)}")
+            return pd.DataFrame()
+
+    def get_user_cost_analysis(
+        self, start_date: datetime, end_date: datetime
+    ) -> pd.DataFrame:
+        """사용자별 비용 분석"""
+        logger.info(f"Getting user cost analysis from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            CASE
+                WHEN identity.arn LIKE '%assumed-role%' THEN
+                    regexp_extract(identity.arn, 'assumed-role/([^/]+)')
+                WHEN identity.arn LIKE '%user%' THEN
+                    regexp_extract(identity.arn, 'user/([^/]+)')
+                ELSE 'Unknown'
+            END as user_or_app,
+            COUNT(*) as call_count,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        GROUP BY identity.arn
+        ORDER BY call_count DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_user_app_detail_analysis(
+        self, start_date: datetime, end_date: datetime
+    ) -> pd.DataFrame:
+        """유저별 애플리케이션별 상세 분석"""
+        logger.info(f"Getting user-app detail analysis from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            CASE
+                WHEN identity.arn LIKE '%assumed-role%' THEN
+                    regexp_extract(identity.arn, 'assumed-role/([^/]+)')
+                WHEN identity.arn LIKE '%user%' THEN
+                    regexp_extract(identity.arn, 'user/([^/]+)')
+                ELSE 'Unknown'
+            END as user_or_app,
+            regexp_extract(modelId, '([^/]+)$') as model_name,
+            COUNT(*) as call_count,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        GROUP BY identity.arn, modelId
+        ORDER BY user_or_app, call_count DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_hourly_usage_pattern(
+        self, start_date: datetime, end_date: datetime
+    ) -> pd.DataFrame:
+        """시간별 사용 패턴"""
+        logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            year, month, day, hour,
+            COUNT(*) as call_count,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        GROUP BY year, month, day, hour
+        ORDER BY year, month, day, hour
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_daily_usage_pattern(
+        self, start_date: datetime, end_date: datetime
+    ) -> pd.DataFrame:
+        """일별 사용 패턴"""
+        logger.info(f"Getting daily usage pattern from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            year, month, day,
+            COUNT(*) as call_count,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        GROUP BY year, month, day
+        ORDER BY year, month, day
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_model_usage_stats(
+        self, start_date: datetime, end_date: datetime
+    ) -> pd.DataFrame:
+        """모델별 사용 통계"""
+        logger.info(f"Getting model usage stats from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            regexp_extract(modelId, '([^/]+)$') as model_name,
+            COUNT(*) as call_count,
+            AVG(CAST(input.inputTokenCount AS DOUBLE)) as avg_input_tokens,
+            AVG(CAST(output.outputTokenCount AS DOUBLE)) as avg_output_tokens,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        GROUP BY modelId
+        ORDER BY call_count DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_total_summary(self, start_date: datetime, end_date: datetime) -> Dict:
+        """전체 요약 통계"""
+        logger.info(f"Getting total summary from {start_date} to {end_date}")
+
+        query = f"""
+        SELECT
+            COUNT(*) as total_calls,
+            SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+            SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+        FROM bedrock_invocation_logs
+        WHERE year >= '{start_date.year}'
+            AND month >= '{start_date.month:02d}'
+            AND day >= '{start_date.day:02d}'
+            AND year <= '{end_date.year}'
+            AND month <= '{end_date.month:02d}'
+            AND day <= '{end_date.day:02d}'
+        """
+
+        df = self.execute_athena_query(query)
+
+        if not df.empty:
+            result = {
+                "total_calls": (
+                    int(df.iloc[0]["total_calls"]) if df.iloc[0]["total_calls"] else 0
+                ),
+                "total_input_tokens": (
+                    int(df.iloc[0]["total_input_tokens"])
+                    if df.iloc[0]["total_input_tokens"]
+                    else 0
+                ),
+                "total_output_tokens": (
+                    int(df.iloc[0]["total_output_tokens"])
+                    if df.iloc[0]["total_output_tokens"]
+                    else 0
+                ),
+                "total_cost_usd": 0.0,  # 모델별로 계산 필요
+            }
+            logger.info(f"Total summary: {result}")
+            return result
+        else:
+            logger.warning("No data found for summary")
+            return {
+                "total_calls": 0,
+                "total_input_tokens": 0,
+                "total_output_tokens": 0,
+                "total_cost_usd": 0.0,
+            }
+
+
+def calculate_cost_for_dataframe(
+    df: pd.DataFrame, model_col: str = "model_name"
+) -> pd.DataFrame:
+    """DataFrame에 비용 컬럼 추가"""
+    logger.info(f"Calculating cost for DataFrame with {len(df)} rows")
+
+    if df.empty:
+        return df
+
+    costs = []
+    for _, row in df.iterrows():
+        model = row.get(model_col, "")
+        input_tokens = (
+            int(row.get("total_input_tokens", 0))
+            if row.get("total_input_tokens")
+            else 0
+        )
+        output_tokens = (
+            int(row.get("total_output_tokens", 0))
+            if row.get("total_output_tokens")
+            else 0
+        )
+        cost = get_model_cost(model, input_tokens, output_tokens)
+        costs.append(cost)
+
+    df["estimated_cost_usd"] = costs
+    logger.info(f"Total cost calculated: ${sum(costs):.4f}")
+    return df
+
+
+def main():
+    logger.info("Starting Bedrock Analytics Dashboard")
+
+    st.set_page_config(
+        page_title="Bedrock Analytics Dashboard", page_icon="📊", layout="wide"
+    )
+
+    st.title("📊 AWS Bedrock Analytics Dashboard")
+    st.markdown("**Athena 기반 실시간 사용량 분석**")
+
+    # 사이드바 설정
+    st.sidebar.header("⚙️ 분석 설정")
+
+    # 리전 선택
+    selected_region = st.sidebar.selectbox(
+        "리전 선택",
+        options=list(REGIONS.keys()),
+        format_func=lambda x: f"{x} - {REGIONS[x]}",
+        index=4,
+    )
+    logger.info(f"Selected region: {selected_region}")
+
+    # 날짜 범위 선택
+    st.sidebar.subheader("📅 날짜 범위 선택")
+
     col1, col2 = st.sidebar.columns(2)
     with col1:
-        start_date = st.date_input("Start Date", datetime.now() - timedelta(days=7))
+        start_date = st.date_input(
+            "시작 날짜",
+            value=datetime.now() - timedelta(days=7),
+            max_value=datetime.now(),
+        )
     with col2:
-        end_date = st.date_input("End Date", datetime.now())
+        end_date = st.date_input(
+            "종료 날짜", value=datetime.now(), max_value=datetime.now()
+        )
 
-    start_time = datetime.combine(start_date, datetime.min.time())
-    end_time = datetime.combine(end_date, datetime.max.time())
+    logger.info(f"Date range: {start_date} to {end_date}")
 
-    if st.sidebar.button("🔄 Refresh Data"):
-        if not selected_regions:
-            st.error("Please select at least one region.")
-            return
+    # 현재 로깅 설정 자동 조회
+    tracker = BedrockAthenaTracker(region=selected_region)
 
-        with st.spinner("Fetching CloudTrail events..."):
-            # Step 1: CloudTrail Events - 실제 사용된 모델 ID 추출
-            events = tracker.get_cloudtrail_events(selected_regions, start_time, end_time)
+    with st.spinner("현재 Model Invocation Logging 설정 확인 중..."):
+        current_config = tracker.get_current_logging_config()
 
-            if not events:
-                st.warning("No CloudTrail events found for the selected criteria.")
-                return
+    # 설정 상태 표시
+    if current_config["status"] == "enabled":
+        st.success("✅ Model Invocation Logging이 활성화되어 있습니다!")
 
-            # 발견된 모델 ID 표시
-            st.success(f"Found {len(events)} Bedrock API calls")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.info(f"📁 **S3 버킷**: 설정됨 ({selected_region})")
+        with col2:
+            st.info(f"📂 **프리픽스**: 설정됨")
 
-            with st.expander("🎯 Discovered Model IDs", expanded=True):
-                if tracker.discovered_models:
-                    st.write("**Models used in the selected time period:**")
-                    for model_id in sorted(tracker.discovered_models):
-                        model_type = "Cross-Region" if model_id.startswith(("us.", "eu.", "ap.")) else "Standard"
-                        st.code(f"{model_id} ({model_type})", language="")
-                else:
-                    st.info("No model IDs could be extracted from CloudTrail events.")
+    elif current_config["status"] == "disabled":
+        st.error("❌ Model Invocation Logging이 비활성화되어 있습니다.")
+        st.markdown("👇 먼저 설정을 활성화해주세요:")
+        st.code("python setup_bedrock_analytics.py")
+        logger.error("Model Invocation Logging is disabled")
+        return
 
-            # Step 2: 사용자별 사용량 분석
-            st.subheader("👥 User Activity Analysis")
-            user_df = tracker.analyze_user_usage(events)
+    else:
+        st.warning(
+            f"⚠️ 설정 확인 중 오류: {current_config.get('error', 'Unknown error')}"
+        )
+        logger.error(f"Error checking logging config: {current_config.get('error')}")
+
+    # 분석 실행
+    if st.sidebar.button("🔍 데이터 분석", type="primary"):
+        logger.info("Analysis button clicked")
+
+        with st.spinner("Athena에서 데이터 분석 중..."):
+
+            # 전체 요약
+            summary = tracker.get_total_summary(start_date, end_date)
+
+            st.header("📊 전체 요약")
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("총 API 호출", f"{summary['total_calls']:,}")
+
+            with col2:
+                st.metric("총 Input 토큰", f"{summary['total_input_tokens']:,}")
+
+            with col3:
+                st.metric("총 Output 토큰", f"{summary['total_output_tokens']:,}")
+
+            # 모델별 통계로 총 비용 계산
+            model_df = tracker.get_model_usage_stats(start_date, end_date)
+            if not model_df.empty:
+                model_df = calculate_cost_for_dataframe(model_df)
+                total_cost = model_df["estimated_cost_usd"].sum()
+                summary["total_cost_usd"] = total_cost
+
+            with col4:
+                st.metric("총 비용", f"${summary['total_cost_usd']:.4f}")
+
+            # 사용자별 분석
+            st.header("👥 사용자/애플리케이션별 분석")
+
+            user_df = tracker.get_user_cost_analysis(start_date, end_date)
+
             if not user_df.empty:
+                # 숫자 컬럼 변환
+                numeric_columns = [
+                    "call_count",
+                    "total_input_tokens",
+                    "total_output_tokens",
+                ]
+                for col in numeric_columns:
+                    if col in user_df.columns:
+                        user_df[col] = pd.to_numeric(
+                            user_df[col], errors="coerce"
+                        ).fillna(0)
+
+                # 비용 계산을 위한 임시 모델명 추가 (모델별 평균 사용)
+                # 실제로는 각 사용자가 어떤 모델을 사용했는지 알아야 정확함
+                # 여기서는 Claude 3 Haiku 기본 가격 사용
+                user_df["estimated_cost_usd"] = (
+                    user_df["total_input_tokens"] * 0.00025 / 1000
+                    + user_df["total_output_tokens"] * 0.00125 / 1000
+                )
+
                 st.dataframe(user_df, use_container_width=True)
+
+                # 비용 차트
+                if len(user_df) > 0:
+                    import plotly.express as px
+
+                    fig = px.bar(
+                        user_df.head(10),
+                        x="user_or_app",
+                        y="estimated_cost_usd",
+                        title="상위 10명 사용자/애플리케이션별 비용",
+                        labels={
+                            "user_or_app": "사용자/애플리케이션",
+                            "estimated_cost_usd": "비용 (USD)",
+                        },
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("No user activity data available.")
+                st.info("분석할 데이터가 없습니다.")
 
-            # Step 3: CloudTrail 이벤트 상세
-            with st.expander("📋 CloudTrail Events Details"):
-                events_df = pd.DataFrame(events)
-                display_columns = ['region', 'time', 'user', 'application', 'event_name', 'model_id', 'input_tokens', 'output_tokens']
-                # 컬럼이 존재하는 것만 표시
-                available_columns = [col for col in display_columns if col in events_df.columns]
-                st.dataframe(events_df[available_columns], use_container_width=True)
+            # 유저별 애플리케이션별 상세 분석
+            st.header("📱 유저별 애플리케이션별 상세 분석")
 
-        # Step 4: CloudWatch Metrics - 실제 사용된 모델만 조회
-        if tracker.discovered_models:
-            with st.spinner("Fetching CloudWatch metrics for token usage..."):
-                st.subheader("📊 Token Usage & Costs")
+            user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date)
 
-                model_ids_list = list(tracker.discovered_models)
-                metrics_data = tracker.get_cloudwatch_metrics(selected_regions, model_ids_list, start_time, end_time)
+            if not user_app_df.empty:
+                # 숫자 컬럼 변환
+                numeric_columns = [
+                    "call_count",
+                    "total_input_tokens",
+                    "total_output_tokens",
+                ]
+                for col in numeric_columns:
+                    if col in user_app_df.columns:
+                        user_app_df[col] = pd.to_numeric(
+                            user_app_df[col], errors="coerce"
+                        ).fillna(0)
 
-                if any(models for models in metrics_data.values()):
-                    cost_df = tracker.calculate_costs(metrics_data)
+                # 비용 계산
+                user_app_df = calculate_cost_for_dataframe(user_app_df)
 
-                    # Summary metrics
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Input Tokens", f"{cost_df['Input Tokens'].sum():,}")
-                    with col2:
-                        st.metric("Total Output Tokens", f"{cost_df['Output Tokens'].sum():,}")
-                    with col3:
-                        st.metric("Total Cost", f"${cost_df['Total Cost ($)'].sum():.4f}")
-                    with col4:
-                        st.metric("Avg Cost per Model", f"${cost_df['Total Cost ($)'].mean():.4f}")
+                st.dataframe(user_app_df, use_container_width=True)
+            else:
+                st.info("분석할 데이터가 없습니다.")
 
-                    # Detailed table
-                    st.dataframe(cost_df, use_container_width=True)
+            # 모델별 분석
+            st.header("🤖 모델별 사용 통계")
 
-                    # Charts
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.subheader("Cost by Region")
-                        region_costs = cost_df.groupby('Region')['Total Cost ($)'].sum()
-                        st.bar_chart(region_costs)
+            if not model_df.empty:
+                # 숫자 컬럼 변환
+                numeric_columns = [
+                    "call_count",
+                    "avg_input_tokens",
+                    "avg_output_tokens",
+                    "total_input_tokens",
+                    "total_output_tokens",
+                    "estimated_cost_usd",
+                ]
+                for col in numeric_columns:
+                    if col in model_df.columns:
+                        model_df[col] = pd.to_numeric(
+                            model_df[col], errors="coerce"
+                        ).fillna(0)
 
-                    with col2:
-                        st.subheader("Token Usage by Model")
-                        model_tokens = cost_df.groupby('Model ID')[['Input Tokens', 'Output Tokens']].sum()
-                        st.bar_chart(model_tokens)
+                st.dataframe(model_df, use_container_width=True)
 
-                    # Step 5: 사용자별 비용 분석
-                    st.subheader("💰 User Cost Analysis")
+                # 모델별 호출 비율 차트
+                if len(model_df) > 0:
+                    import plotly.express as px
 
-                    user_cost_df, calc_method = tracker.calculate_user_costs(events, metrics_data)
+                    fig = px.pie(
+                        model_df,
+                        values="call_count",
+                        names="model_name",
+                        title="모델별 호출 비율",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
-                    if calc_method == "actual":
-                        st.success("✅ Using actual token data from CloudTrail events (most accurate)")
-                    else:
-                        st.info("📌 User costs are estimated based on their API call ratio, as CloudWatch metrics don't provide per-user token counts.")
+            # 일별 사용 패턴
+            st.header("📅 일별 사용 패턴")
 
-                    if not user_cost_df.empty:
-                        # 사용자별 총 비용 요약
-                        # 실제 토큰 vs 추정 토큰에 따라 컬럼 이름 다름
-                        if calc_method == "actual":
-                            user_summary = user_cost_df.groupby('User').agg({
-                                'Total Cost ($)': 'sum',
-                                'Invocation Count': 'sum',
-                                'Input Tokens': 'sum',
-                                'Output Tokens': 'sum'
-                            }).reset_index()
-                        else:
-                            user_summary = user_cost_df.groupby('User').agg({
-                                'Total Cost ($)': 'sum',
-                                'Invocation Count': 'sum',
-                                'Est. Input Tokens': 'sum',
-                                'Est. Output Tokens': 'sum'
-                            }).reset_index()
-                        user_summary = user_summary.sort_values(by='Total Cost ($)', ascending=False)
+            daily_df = tracker.get_daily_usage_pattern(start_date, end_date)
 
-                        # 요약 메트릭
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Top User", user_summary.iloc[0]['User'] if len(user_summary) > 0 else "N/A")
-                        with col2:
-                            st.metric("Top User Cost", f"${user_summary.iloc[0]['Total Cost ($)']:.4f}" if len(user_summary) > 0 else "$0")
-                        with col3:
-                            st.metric("Total Users", len(user_summary))
+            if not daily_df.empty and len(daily_df) > 0:
+                # 날짜 컬럼 생성
+                daily_df["date"] = pd.to_datetime(
+                    daily_df["year"]
+                    + "-"
+                    + daily_df["month"].str.zfill(2)
+                    + "-"
+                    + daily_df["day"].str.zfill(2)
+                )
 
-                        # 사용자별 요약 테이블
-                        st.write("**User Cost Summary:**")
+                # 숫자 컬럼 변환
+                daily_df["call_count"] = pd.to_numeric(
+                    daily_df["call_count"], errors="coerce"
+                ).fillna(0)
+                daily_df["total_input_tokens"] = pd.to_numeric(
+                    daily_df["total_input_tokens"], errors="coerce"
+                ).fillna(0)
+                daily_df["total_output_tokens"] = pd.to_numeric(
+                    daily_df["total_output_tokens"], errors="coerce"
+                ).fillna(0)
 
-                        # 실제 토큰 vs 추정 토큰에 따라 컬럼 이름 다르게 표시
-                        if calc_method == "actual":
-                            format_dict = {
-                                'Total Cost ($)': '${:.4f}',
-                                'Input Tokens': '{:,.0f}',
-                                'Output Tokens': '{:,.0f}',
-                                'Invocation Count': '{:,.0f}'
-                            }
-                        else:
-                            format_dict = {
-                                'Total Cost ($)': '${:.4f}',
-                                'Est. Input Tokens': '{:,.0f}',
-                                'Est. Output Tokens': '{:,.0f}',
-                                'Invocation Count': '{:,.0f}'
-                            }
+                import plotly.express as px
 
-                        st.dataframe(user_summary.style.format(format_dict), use_container_width=True)
+                fig = px.line(
+                    daily_df,
+                    x="date",
+                    y="call_count",
+                    title="일별 API 호출 패턴",
+                    labels={"date": "날짜", "call_count": "API 호출 수"},
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-                        # 상세 사용자별 비용 (모델/리전 분리)
-                        with st.expander("📊 Detailed User Costs by Model & Region"):
-                            st.dataframe(user_cost_df, use_container_width=True)
+                # 일별 토큰 사용량
+                fig2 = px.line(
+                    daily_df,
+                    x="date",
+                    y=["total_input_tokens", "total_output_tokens"],
+                    title="일별 토큰 사용량",
+                    labels={
+                        "date": "날짜",
+                        "value": "토큰 수",
+                        "variable": "토큰 종류",
+                    },
+                )
+                st.plotly_chart(fig2, use_container_width=True)
 
-                        # 사용자별 비용 차트
-                        st.subheader("Cost by User")
-                        user_costs = user_summary.set_index('User')['Total Cost ($)']
-                        st.bar_chart(user_costs)
-                    else:
-                        st.info("Unable to calculate user costs. Make sure CloudWatch metrics are available.")
+            # 시간대별 패턴
+            st.header("⏰ 시간대별 사용 패턴")
 
-                    # Step 6: 애플리케이션별 비용 분석
-                    st.subheader("🚀 Application Cost Analysis")
+            hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date)
 
-                    if tracker.discovered_applications:
-                        st.write(f"**Discovered Applications:** {', '.join(sorted(tracker.discovered_applications))}")
+            if not hourly_df.empty and len(hourly_df) > 0:
+                # 시간 컬럼 생성
+                hourly_df["datetime"] = pd.to_datetime(
+                    hourly_df["year"]
+                    + "-"
+                    + hourly_df["month"].str.zfill(2)
+                    + "-"
+                    + hourly_df["day"].str.zfill(2)
+                    + " "
+                    + hourly_df["hour"].str.zfill(2)
+                    + ":00:00"
+                )
 
-                        app_cost_df, app_calc_method = tracker.calculate_application_costs(events, metrics_data)
+                # 숫자 컬럼 변환
+                hourly_df["call_count"] = pd.to_numeric(
+                    hourly_df["call_count"], errors="coerce"
+                ).fillna(0)
 
-                        if app_calc_method == "actual":
-                            st.success("✅ Using actual token data from CloudTrail events (most accurate)")
-                        else:
-                            st.info("📌 Application costs are estimated based on their API call ratio.")
+                import plotly.express as px
 
-                        if not app_cost_df.empty:
-                            # 애플리케이션별 총 비용 요약
-                            app_summary = app_cost_df.groupby('Application').agg({
-                                'Total Cost ($)': 'sum',
-                                'Invocation Count': 'sum'
-                            }).reset_index()
-                            app_summary = app_summary.sort_values(by='Total Cost ($)', ascending=False)
+                fig = px.line(
+                    hourly_df,
+                    x="datetime",
+                    y="call_count",
+                    title="시간대별 API 호출 패턴",
+                    labels={"datetime": "시간", "call_count": "API 호출 수"},
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
-                            # 요약 메트릭
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("Top Application", app_summary.iloc[0]['Application'] if len(app_summary) > 0 else "N/A")
-                            with col2:
-                                st.metric("Top App Cost", f"${app_summary.iloc[0]['Total Cost ($)']:.4f}" if len(app_summary) > 0 else "$0")
-                            with col3:
-                                st.metric("Total Applications", len(app_summary))
+    else:
+        # 초기 화면
+        st.info(
+            "👈 왼쪽 사이드바에서 리전과 날짜 범위를 선택한 후 '데이터 분석' 버튼을 클릭하세요."
+        )
 
-                            # 애플리케이션별 요약 테이블
-                            st.write("**Application Cost Summary:**")
-                            st.dataframe(app_summary.style.format({
-                                'Total Cost ($)': '${:.4f}',
-                                'Invocation Count': '{:,.0f}'
-                            }), use_container_width=True)
+        st.markdown("### 🚀 Athena 기반 분석의 장점")
 
-                            # 상세 애플리케이션별 비용 (모델/리전 분리)
-                            with st.expander("📊 Detailed Application Costs by Model & Region"):
-                                st.dataframe(app_cost_df, use_container_width=True)
+        st.markdown(
+            """
+        - **🚀 고성능**: 페타바이트 규모 데이터 처리 가능
+        - **💰 비용 효율적**: 스캔한 데이터량만큼만 과금
+        - **📊 SQL 쿼리**: 표준 SQL로 복잡한 분석 가능
+        - **🔗 QuickSight 연동**: 실시간 대시보드 구축 가능
+        - **📈 확장성**: 데이터 증가에 따른 성능 저하 없음
+        """
+        )
 
-                            # 애플리케이션별 비용 차트
-                            st.subheader("Cost by Application")
-                            app_costs = app_summary.set_index('Application')['Total Cost ($)']
-                            st.bar_chart(app_costs)
-                        else:
-                            st.info("Unable to calculate application costs. Make sure CloudWatch metrics are available.")
-                    else:
-                        st.info("No applications identified. Applications can be identified via:\n"
-                               "- IAM Role names (e.g., AppName-BedrockRole)\n"
-                               "- UserAgent strings set by your application code\n\n"
-                               "See the documentation for setup instructions.")
+        st.markdown("### 🛠️ 설정이 필요한 경우")
 
-                else:
-                    st.info("No CloudWatch metrics data found. This may be because:\n"
-                           "- CloudWatch metrics are delayed (can take up to 15 minutes)\n"
-                           "- The models were invoked but no metrics are published yet\n"
-                           "- CloudWatch detailed monitoring is not enabled")
-        else:
-            st.warning("No model IDs were discovered in CloudTrail events. Cannot query CloudWatch metrics.")
+        st.code(
+            """
+# Bedrock Analytics 통합 설정 실행
+python setup_bedrock_analytics.py
+
+# 또는 커스텀 버킷명으로 설정
+python setup_bedrock_analytics.py --bucket my-bedrock-logs
+        """
+        )
+
+        st.markdown("### 📋 지원 모델")
+        st.markdown(
+            """
+        - **Claude 3**: Haiku, Sonnet, Opus
+        - **Claude 3.5**: Haiku, Sonnet
+        - **Claude 3.7**: Sonnet
+        - **Claude 4**: Sonnet 4, Sonnet 4.5
+        - **Claude 4.1**: Opus
+        """
+        )
+
+        st.markdown("### 🌍 지원 리전")
+        for region_id, region_name in REGIONS.items():
+            st.markdown(f"- **{region_id}**: {region_name}")
+
+    logger.info("Dashboard rendering complete")
+
 
 if __name__ == "__main__":
     main()
