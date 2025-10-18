@@ -1,61 +1,142 @@
-# Bedrock Usage Tracker
-
-Amazon Bedrock 사용량을 추적하고 비용을 계산하는 애플리케이션입니다. Web UI(Streamlit)와 CLI 두 가지 방식으로 사용 가능합니다.
+# AWS Bedrock Usage Analytics System
 
 ## 목차
-- [기능](#기능)
-- [설치 및 설정](#설치-및-설정)
-- [테스트 환경 구축](#테스트-환경-구축)
-- [실행 방법](#실행-방법)
-- [사용법](#사용법)
-- [애플리케이션별 추적](#애플리케이션별-추적)
-- [실시간 모니터링 (선택사항)](#실시간-모니터링-선택사항)
-- [데이터 정확도](#데이터-정확도)
-- [필수 요구사항](#필수-요구사항)
+- [애플리케이션 개요](#애플리케이션-개요)
+- [핵심 기능](#핵심-기능)
+- [시스템 아키텍처](#시스템-아키텍처)
+- [환경 요구사항](#환경-요구사항)
+- [설치 방법](#설치-방법)
+- [사용 방법](#사용-방법)
+- [소스코드 상세 설명](#소스코드-상세-설명)
+- [시스템 플로우](#시스템-플로우)
+- [데모](#데모)
+- [문제 해결](#문제-해결)
 
-## 기능
+---
 
-### 핵심 기능
-- **CloudTrail 이벤트 추적**: Bedrock 모델 호출 이벤트 추적
-- **실제 토큰 사용량 추출**: CloudTrail responseElements에서 실제 토큰 데이터 추출 (가장 정확)
-- **CloudWatch 메트릭**: 토큰 사용량 모니터링 (fallback)
-- **비용 계산**: 리전별 요금에 따른 정확한 비용 계산
-- **다중 선택**: 여러 리전과 모델 동시 선택
-- **시각화**: 차트를 통한 사용량 및 비용 분석 (Streamlit UI)
+## 애플리케이션 개요
 
-### 추적 가능한 항목
-- **사용자별 분석**: IAM User/Role별 사용량 및 비용
-- **애플리케이션별 분석**: IAM Role 또는 UserAgent 기반 앱별 사용량 및 비용
-- **리전별 분석**: AWS 리전별 사용 패턴
-- **모델별 분석**: Claude 모델별 사용 통계
+### 목적
+AWS Bedrock 모델 사용량을 **다중 리전**에서 추적하고 **애플리케이션별/사용자별** 비용을 분석하는 통합 분석 시스템입니다. AWS Model Invocation Logging과 Amazon Athena를 활용하여 **코드 수정 없이** 100% 정확한 사용량 추적이 가능합니다.
 
-### 제공되는 인터페이스
-- **Streamlit Web UI** (`bedrock_tracker.py`): 대시보드 형태의 웹 인터페이스
-- **CLI** (`bedrock_tracker_cli.py`): 터미널에서 직접 실행하는 커맨드라인 인터페이스
+### 주요 용도
+- **비용 모니터링**: 사용자/애플리케이션별 실시간 비용 분석
+- **사용 패턴 분석**: 시간대별/일별 사용 패턴 파악
+- **리전별 분석**: 다중 리전(US, Asia, Europe)에서 사용량 통합 관리
+- **모델 최적화**: 모델별 사용 통계를 통한 비용 최적화
 
-## 설치 및 설정
+### 지원 리전
+- **us-east-1**: US East (N. Virginia)
+- **us-west-2**: US West (Oregon)
+- **eu-central-1**: Europe (Frankfurt)
+- **ap-northeast-1**: Asia Pacific (Tokyo)
+- **ap-northeast-2**: Asia Pacific (Seoul)
+- **ap-southeast-1**: Asia Pacific (Singapore)
 
-### 1. 의존성 설치
+### 지원 모델
+- **Claude 3**: Haiku, Sonnet, Opus
+- **Claude 3.5**: Haiku, Sonnet
+- **Claude 3.7**: Sonnet
+- **Claude 4**: Sonnet 4, Sonnet 4.5, Opus 4, Opus 4.1
 
-```bash
-pip install -r requirements.txt
+---
+
+## 핵심 기능
+
+### 자동 로깅 및 추적
+- AWS Model Invocation Logging을 통한 자동 로그 수집
+- S3에 JSON 형식으로 저장된 로그 자동 파티셔닝
+- 애플리케이션 코드 수정 완전히 불필요
+
+### 다차원 분석
+- **사용자별 분석**: IAM User/Role별 호출 수, 토큰 사용량, 비용
+- **애플리케이션별 분석**: Role 기반 앱별 상세 비용 분석
+- **모델별 분석**: Claude 모델별 평균/총 사용량 통계
+- **시간 패턴 분석**: 시간별/일별 사용 패턴 시각화
+
+### 실시간 대시보드
+- Streamlit 기반 인터랙티브 웹 UI
+- Plotly를 활용한 동적 차트 및 그래프
+- 날짜 범위 선택 및 리전별 필터링
+- CSV 데이터 다운로드 지원
+
+### 비용 계산
+- 모델별 정확한 토큰 단가 적용
+- Input/Output 토큰 분리 계산
+- USD 기준 실시간 비용 집계
+
+---
+
+## 시스템 아키텍처
+
+```mermaid
+graph TB
+    subgraph "애플리케이션"
+        A1[Customer Service App]
+        A2[Data Analysis App]
+        A3[Chatbot App]
+        A4[Document Processor]
+    end
+
+    subgraph "AWS Bedrock"
+        B1[Claude 3 Haiku]
+        B2[Claude 3.5 Sonnet]
+        B3[Claude 4 Sonnet]
+    end
+
+    subgraph "Model Invocation Logging"
+        C1[CloudWatch Logs]
+        C2[S3 Logs Bucket]
+    end
+
+    subgraph "Analytics Layer"
+        D1[AWS Glue Catalog]
+        D2[Athena Query Engine]
+        D3[S3 Analytics Bucket]
+    end
+
+    subgraph "Visualization"
+        E1[Streamlit Dashboard]
+        E2[Cost Reports]
+        E3[Usage Charts]
+    end
+
+    A1 --> B1
+    A2 --> B2
+    A3 --> B1
+    A4 --> B3
+
+    B1 --> C1
+    B2 --> C1
+    B3 --> C1
+
+    C1 --> C2
+    C2 --> D1
+    D1 --> D2
+    D2 --> D3
+
+    D2 --> E1
+    E1 --> E2
+    E1 --> E3
+
+    style A1 fill:#FFE5B4
+    style A2 fill:#FFE5B4
+    style A3 fill:#FFE5B4
+    style A4 fill:#FFE5B4
+    style B1 fill:#B4D7FF
+    style B2 fill:#B4D7FF
+    style B3 fill:#B4D7FF
+    style C2 fill:#C8E6C9
+    style D2 fill:#FFF59D
+    style E1 fill:#F8BBD0
 ```
 
-### 2. AWS 자격 증명 설정
+---
 
-```bash
-aws configure
-```
+## 환경 요구사항
 
-필요한 정보:
-- AWS Access Key ID
-- AWS Secret Access Key
-- Default region name (예: us-east-1)
-- Default output format (예: json)
-
-### 3. AWS 권한 설정
-
-사용자 또는 Role에 다음 권한이 필요합니다:
+### AWS 권한
+다음 AWS 서비스에 대한 권한이 필요합니다:
 
 ```json
 {
@@ -64,10 +145,42 @@ aws configure
     {
       "Effect": "Allow",
       "Action": [
-        "cloudtrail:LookupEvents",
-        "cloudwatch:GetMetricStatistics",
-        "bedrock:ListFoundationModels",
-        "sts:AssumeRole"
+        "bedrock:InvokeModel",
+        "bedrock:GetModelInvocationLoggingConfiguration",
+        "bedrock:PutModelInvocationLoggingConfiguration",
+        "bedrock:ListFoundationModels"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket",
+        "s3:PutObject",
+        "s3:CreateBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::bedrock-analytics-*",
+        "arn:aws:s3:::bedrock-analytics-*/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "athena:StartQueryExecution",
+        "athena:GetQueryExecution",
+        "athena:GetQueryResults"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "glue:CreateDatabase",
+        "glue:CreateTable",
+        "glue:GetDatabase",
+        "glue:GetTable"
       ],
       "Resource": "*"
     }
@@ -75,675 +188,816 @@ aws configure
 }
 ```
 
-### 4. CloudTrail 설정
-
-실제 토큰 데이터를 추출하려면 CloudTrail에서 다음을 설정해야 합니다:
-
-1. **데이터 이벤트** 로깅 활성화
-2. Bedrock API 호출 로깅 설정:
-   - `InvokeModel`
-   - `InvokeModelWithResponseStream`
-3. `responseElements` 포함 옵션 활성화
-
-> **참고**: CloudTrail에 토큰 데이터가 없어도 CloudWatch 메트릭을 fallback으로 사용하여 추정 비용을 계산할 수 있습니다.
-
-## 테스트 환경 구축
-
-애플리케이션별 추적 기능을 테스트하기 위한 환경을 구축할 수 있습니다.
-
-### Step 1: 테스트용 IAM Role 생성
-
-여러 애플리케이션을 시뮬레이션하기 위한 IAM Role을 생성합니다:
-
-```bash
-python setup_test_roles.py
-```
-
-생성되는 Role:
-- `CustomerServiceApp-BedrockRole`
-- `DataAnalysisApp-BedrockRole`
-- `ChatbotApp-BedrockRole`
-- `DocumentProcessorApp-BedrockRole`
-
-각 Role은 Bedrock API 호출 권한을 가지며, CloudTrail에서 애플리케이션을 구분하는 데 사용됩니다.
-
-### Step 2: 테스트 데이터 생성
-
-생성된 IAM Role을 사용하여 실제 Bedrock API를 호출합니다:
-
-```bash
-python generate_test_data.py
-```
-
-이 스크립트는:
-- 각 애플리케이션 Role로 Bedrock API를 호출
-- 다양한 모델(Haiku, Sonnet 4.5)을 사용
-- 여러 리전(us-east-1, us-west-2)에서 호출
-- UserAgent 기반 애플리케이션도 시뮬레이션
-
-**실행 결과 예시**:
-```
-✅ Successful Scenarios: 7/7
-✅ Successful API Calls: 21/21
-```
-
-### Step 3: CloudTrail 이벤트 대기
-
-API 호출 후 CloudTrail 이벤트가 인덱싱될 때까지 2-3분 정도 기다립니다.
-
-```bash
-# 2분 대기
-sleep 120
-```
-
-### Step 4: 결과 확인
-
-이제 tracker를 실행하여 애플리케이션별 비용 분석을 확인할 수 있습니다:
-
-```bash
-# CLI로 확인
-python bedrock_tracker_cli.py
-
-# 또는 Streamlit UI로 확인
-streamlit run bedrock_tracker.py
-```
-
-### Step 5: 테스트 환경 정리 (선택사항)
-
-테스트가 끝나면 생성한 IAM Role을 삭제할 수 있습니다:
-
-```bash
-python setup_test_roles.py cleanup
-```
-
-## 실행 방법
-
-### 방법 1: Streamlit Web UI (권장)
-
-대시보드 형태의 웹 인터페이스로 시각화와 함께 데이터를 확인할 수 있습니다.
-
-```bash
-streamlit run bedrock_tracker.py
-```
-
-브라우저에서 자동으로 열리며, 일반적으로 `http://localhost:8501`에서 접근 가능합니다.
-
-**기능**:
-- 사이드바에서 리전, 날짜 범위 선택
-- 차트와 테이블로 시각화
-- 인터랙티브한 데이터 탐색
-
-### 방법 2: CLI (커맨드라인)
-
-터미널에서 직접 실행하여 빠르게 결과를 확인할 수 있습니다.
-
-```bash
-python bedrock_tracker_cli.py
-```
-
-**특징**:
-- Web UI와 동일한 분석 기능
-- 터미널에서 즉시 실행
-- 자동화 스크립트에 통합 가능
-- 기본 설정: 10월 1일 ~ 현재, us-east-1 & us-west-2
-
-**CLI 파라미터 수정** (필요시):
-```python
-# bedrock_tracker_cli.py 파일 수정
-start_time = datetime(2025, 10, 1)  # 시작 날짜
-end_time = datetime.now()           # 종료 날짜
-regions = ['us-east-1', 'us-west-2']  # 조회할 리전
-```
-
-## 사용법
-
-### Streamlit UI 사용법
-
-1. 애플리케이션 실행:
-   ```bash
-   streamlit run bedrock_tracker.py
-   ```
-
-2. **사이드바 설정**:
-   - 리전 선택 (다중 선택 가능)
-   - 날짜 범위 설정
-   - "Refresh Data" 버튼 클릭
-
-3. **메인 화면 확인**:
-   - **Discovered Models**: 발견된 모델 ID 목록
-   - **User Activity Analysis**: 사용자별 API 호출 횟수
-   - **User Cost Analysis**:
-     - 사용자별 비용 (실제 토큰 기반 또는 추정)
-     - 상세 breakdown (리전, 모델별)
-   - **Application Cost Analysis**:
-     - 애플리케이션별 비용
-     - 앱별 리전, 모델 사용 패턴
-
-### CLI 사용법
-
-```bash
-python bedrock_tracker_cli.py
-```
-
-출력 결과:
-```
-================================================================================
-💰 USER COST ANALYSIS
-================================================================================
-User: CustomerServiceApp        $0.0084 (3 calls)
-User: DataAnalysisApp           $0.0543 (2 calls)
-...
-
-================================================================================
-🚀 APPLICATION COST ANALYSIS
-================================================================================
-Application: CustomerServiceApp  $0.0084 (3 calls, Haiku)
-Application: DataAnalysisApp     $0.0543 (2 calls, Sonnet 4.5)
-...
-```
-
-## 애플리케이션별 추적
-
-애플리케이션별로 Bedrock 사용량과 비용을 추적하는 두 가지 방법이 있습니다.
-
-### 방법 1: IAM Role 사용 (권장)
-
-각 애플리케이션에 전용 IAM Role을 부여하고 `-BedrockRole` 네이밍 컨벤션을 사용합니다.
-
-**Role 이름 예시**:
-```
-CustomerServiceApp-BedrockRole
-DataAnalysisApp-BedrockRole
-ChatbotApp-BedrockRole
-DocumentProcessorApp-BedrockRole
-```
-
-**애플리케이션 코드에서 사용**:
-
-```python
-import boto3
-import json
-
-# 1. STS로 Role Assume
-sts = boto3.client('sts')
-assumed_role = sts.assume_role(
-    RoleArn='arn:aws:iam::YOUR_ACCOUNT_ID:role/CustomerServiceApp-BedrockRole',
-    RoleSessionName='CustomerServiceApp-session'
-)
-
-# 2. Assumed role credentials로 Bedrock 클라이언트 생성
-bedrock = boto3.client(
-    'bedrock-runtime',
-    region_name='us-east-1',
-    aws_access_key_id=assumed_role['Credentials']['AccessKeyId'],
-    aws_secret_access_key=assumed_role['Credentials']['SecretAccessKey'],
-    aws_session_token=assumed_role['Credentials']['SessionToken']
-)
-
-# 3. Bedrock API 호출
-response = bedrock.invoke_model(
-    modelId='us.anthropic.claude-3-haiku-20240307-v1:0',
-    body=json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": "Hello"}]
-    })
-)
-```
-
-**장점**:
-- 가장 정확한 애플리케이션 식별
-- CloudTrail에서 명확하게 구분됨
-- IAM 정책으로 세밀한 권한 제어 가능
-
-### 방법 2: UserAgent 사용
-
-애플리케이션 코드에서 UserAgent를 설정합니다.
-
-```python
-from botocore.config import Config
-import boto3
-
-# UserAgent에 앱 이름 추가
-config = Config(user_agent_extra='CustomerServiceApp/1.0')
-
-bedrock = boto3.client(
-    'bedrock-runtime',
-    region_name='us-east-1',
-    config=config
-)
-
-# Bedrock API 호출
-response = bedrock.invoke_model(
-    modelId='us.anthropic.claude-3-haiku-20240307-v1:0',
-    body=json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 200,
-        "messages": [{"role": "user", "content": "Hello"}]
-    })
-)
-```
-
-**장점**:
-- 구현이 간단함
-- 기존 Role 변경 불필요
-
-**단점**:
-- IAM Role 방식보다 덜 명확함
-- UserAgent 파싱에 의존
-
-### 애플리케이션 식별 로직
-
-Tracker는 다음 순서로 애플리케이션을 식별합니다:
-
-1. **IAM Role ARN에서 추출** (우선순위 높음):
-   ```
-   arn:aws:sts::123456789012:assumed-role/CustomerServiceApp-BedrockRole/session
-   → Application: CustomerServiceApp
-   ```
-
-2. **UserAgent에서 추출** (fallback):
-   ```
-   Boto3/1.34.0 Python/3.11 CustomerServiceApp/1.0
-   → Application: CustomerServiceApp
-   ```
-
-3. **식별 불가능한 경우**:
-   - "Unknown"으로 표시
-
-## 실시간 모니터링 (선택사항)
-
-현재 tracker는 CloudTrail 기반으로 히스토리 데이터를 분석합니다. 실시간 대시보드가 필요한 경우 CloudWatch 커스텀 메트릭을 사용할 수 있습니다.
-
-### CloudWatch 기본 메트릭의 한계
-
-AWS Bedrock이 자동으로 보내는 기본 메트릭은 **애플리케이션별 구분이 불가능**합니다:
-
-```
-AWS/Bedrock 네임스페이스:
-- Dimensions: ModelId, Region만 존재
-- Application, User 차원 없음
-- 리전별, 모델별 총합만 제공
-```
-
-### CloudWatch 커스텀 메트릭 사용
-
-애플리케이션 코드에서 직접 CloudWatch에 메트릭을 보내면 **애플리케이션별 실시간 모니터링**이 가능합니다.
-
-#### 구현 예시
-
-```python
-import boto3
-import json
-from datetime import datetime
-
-class BedrockWithMetrics:
-    """Bedrock API 호출 시 자동으로 CloudWatch 메트릭 전송"""
-
-    def __init__(self, application_name: str, region_name: str = 'us-east-1'):
-        self.application_name = application_name
-        self.bedrock = boto3.client('bedrock-runtime', region_name=region_name)
-        self.cloudwatch = boto3.client('cloudwatch', region_name=region_name)
-
-    def invoke_model(self, model_id: str, messages: list, max_tokens: int = 200):
-        # 1. Bedrock API 호출
-        response = self.bedrock.invoke_model(
-            modelId=model_id,
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": max_tokens,
-                "messages": messages
-            })
-        )
-
-        # 2. 응답에서 토큰 사용량 추출
-        response_body = json.loads(response['body'].read())
-        usage = response_body.get('usage', {})
-        input_tokens = usage.get('input_tokens', 0)
-        output_tokens = usage.get('output_tokens', 0)
-
-        # 3. CloudWatch에 커스텀 메트릭 전송
-        self.cloudwatch.put_metric_data(
-            Namespace='Custom/BedrockUsage',
-            MetricData=[
-                {
-                    'MetricName': 'InputTokenCount',
-                    'Dimensions': [
-                        {'Name': 'Application', 'Value': self.application_name},
-                        {'Name': 'ModelId', 'Value': model_id}
-                    ],
-                    'Value': input_tokens,
-                    'Unit': 'Count',
-                    'Timestamp': datetime.utcnow()
-                },
-                {
-                    'MetricName': 'OutputTokenCount',
-                    'Dimensions': [
-                        {'Name': 'Application', 'Value': self.application_name},
-                        {'Name': 'ModelId', 'Value': model_id}
-                    ],
-                    'Value': output_tokens,
-                    'Unit': 'Count',
-                    'Timestamp': datetime.utcnow()
-                }
-            ]
-        )
-
-        return response_body
-
-# 사용 예시
-bedrock_client = BedrockWithMetrics(
-    application_name='CustomerServiceApp',
-    region_name='us-east-1'
-)
-
-response = bedrock_client.invoke_model(
-    model_id='us.anthropic.claude-3-haiku-20240307-v1:0',
-    messages=[{"role": "user", "content": "Hello"}]
-)
-```
-
-완전한 예시 코드는 `custom_metrics_example.py` 파일을 참조하세요.
-
-#### CloudWatch 콘솔에서 확인
-
-1. **CloudWatch 콘솔** 접속
-2. **Metrics** → **All metrics** 선택
-3. **Custom/BedrockUsage** 네임스페이스 선택
-4. **Application** Dimension으로 필터링
-5. 애플리케이션별 토큰 사용량 그래프 확인
-
-#### 대시보드 생성
-
-CloudWatch 콘솔에서 커스텀 대시보드를 만들어 실시간 모니터링 가능:
-
-- 애플리케이션별 토큰 사용량 추이
-- 비용 예측 위젯
-- 알람 설정 (일일 한도 초과시)
-
-### 모니터링 방법 비교
-
-| 구분 | CloudTrail 기반 (현재) | CloudWatch 커스텀 메트릭 | 하이브리드 (권장) |
-|------|----------------------|------------------------|------------------|
-| **구현 복잡도** | 낮음 | 중간 | 중간 |
-| **코드 수정** | 불필요 | 필요 | 필요 |
-| **실시간 모니터링** | ❌ | ✅ | ✅ |
-| **히스토리 분석** | ✅ (90일) | ✅ (15개월) | ✅ |
-| **상세 분석** | ✅ | ⚠️ 제한적 | ✅ |
-| **대시보드** | 별도 구축 | CloudWatch 제공 | CloudWatch 제공 |
-| **알람** | 불가능 | ✅ 가능 | ✅ 가능 |
-| **추가 비용** | 없음 | 커스텀 메트릭 비용 | 커스텀 메트릭 비용 |
-
-### 권장 사용 시나리오
-
-#### CloudTrail만 사용 (소규모)
-- 소규모 프로젝트
-- 주기적 리포트 생성
-- 애플리케이션 코드 수정 불가
-
-**장점**: 추가 비용 없음, 구현 간단
-
-#### CloudWatch 커스텀 메트릭 추가 (중규모)
-- 실시간 모니터링 필요
-- 토큰 사용량 알람 필요
-- 대시보드 구축 필요
-
-**장점**: 실시간 가시성, 알람 설정 가능
-
-#### 하이브리드 방식 (대규모, 권장)
-- CloudWatch: 실시간 대시보드 + 알람
-- CloudTrail: 상세 분석 + 히스토리
-
-**장점**: 양쪽의 장점 모두 활용
-
-### 비용 고려사항
-
-#### CloudWatch 커스텀 메트릭 비용
-
-```
-- 첫 10,000개 메트릭: $0.30/메트릭/월
-- API 호출당 2-3개 메트릭 전송
-- 예시: 10,000 API 호출/월 = 20,000 메트릭 = $6,000/월
-
-실제 비용 예측:
-- 1,000 API 호출/월: ~$60/월
-- 10,000 API 호출/월: ~$600/월
-- 100,000 API 호출/월: ~$6,000/월
-```
-
-> **참고**: 비용이 높은 경우, 샘플링(매 N번째 호출만 전송) 또는 집계 방식 사용 가능
-
-### 추가 권한 필요
-
-커스텀 메트릭 사용시 IAM 정책에 추가:
-
-```json
-{
-  "Effect": "Allow",
-  "Action": [
-    "cloudwatch:PutMetricData"
-  ],
-  "Resource": "*"
-}
-```
-
-## 데이터 정확도
-
-### 실제 토큰 데이터 (최고 정확도)
-
-CloudTrail의 `responseElements`에 토큰 정보가 포함된 경우:
-
-✅ **장점**:
-- 사용자별 실제 토큰 사용량
-- 애플리케이션별 실제 토큰 사용량
-- 정확한 비용 계산
-
-**CloudTrail 이벤트 구조**:
-```json
-{
-  "responseElements": {
-    "usage": {
-      "inputTokens": 1234,
-      "outputTokens": 567
-    }
-  }
-}
-```
-
-### 추정 토큰 데이터 (추정치)
-
-CloudTrail에 토큰 정보가 없는 경우, CloudWatch 메트릭을 사용합니다:
-
-⚠️ **한계**:
-- CloudWatch는 리전별, 모델별 총합만 제공
-- API 호출 횟수 비율로 토큰 분배
-- 각 호출의 토큰 사용량이 다를 수 있어 부정확할 수 있음
-
-**추정 방식**:
-```
-사용자 A의 추정 토큰 = 모델 총 토큰 × (사용자 A의 호출 횟수 / 전체 호출 횟수)
-```
-
-**예시**:
-```
-모델: Claude Sonnet 4.5 (us-east-1)
-총 토큰: 10,000 input, 2,000 output
-
-사용자 A: 8회 호출 (80%)
-사용자 B: 2회 호출 (20%)
-
-→ 사용자 A 추정: 8,000 input, 1,600 output
-→ 사용자 B 추정: 2,000 input, 400 output
-```
-
-### 데이터 소스 표시
-
-Tracker는 항상 사용된 데이터 소스를 명시합니다:
-
-- **"Actual Tokens from CloudTrail"**: 실제 토큰 데이터 사용
-- **"CloudWatch (Estimated)"**: CloudWatch 메트릭 기반 추정
-
-## 필수 요구사항
-
-### Python 버전
-- Python 3.8 이상
+### Python 환경
+- **Python**: 3.8 이상
+- **AWS CLI**: 2.0 이상 (선택사항)
 
 ### Python 패키지
 ```
-boto3
-streamlit
-pandas
-plotly
+boto3>=1.34.0
+streamlit>=1.31.0
+pandas>=2.0.0
+plotly>=5.18.0
 ```
 
-설치:
+---
+
+## 설치 방법
+
+### 1. 저장소 클론
+```bash
+git clone <repository-url>
+cd bedrock_usage
+```
+
+### 2. 가상환경 생성 (권장)
+```bash
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+# 또는
+venv\Scripts\activate     # Windows
+```
+
+### 3. 패키지 설치
 ```bash
 pip install -r requirements.txt
 ```
 
-### AWS 권한
+### 4. AWS 자격증명 설정
+```bash
+aws configure
+# 또는 환경변수 설정
+export AWS_ACCESS_KEY_ID=your_key
+export AWS_SECRET_ACCESS_KEY=your_secret
+export AWS_DEFAULT_REGION=us-east-1
+```
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
+---
+
+## 사용 방법
+
+### 전체 설정 플로우
+
+#### Step 1: Athena 분석 환경 구축
+```bash
+python setup_athena_bucket.py
+```
+이 스크립트는 다음을 자동으로 수행합니다:
+- 리전별 S3 Analytics 버킷 생성
+- Glue 데이터베이스 및 테이블 생성
+- 오늘 날짜 파티션 자동 추가
+- 데이터 연결 테스트
+
+#### Step 2: Bedrock 로깅 설정 확인
+```bash
+python check_bedrock_logging.py
+```
+현재 Model Invocation Logging 설정 상태를 확인합니다.
+
+#### Step 3: IAM Role 권한 검증
+```bash
+python verify_bedrock_permissions.py
+```
+모든 리전에서 IAM Role의 Bedrock 접근 권한을 검증합니다.
+
+#### Step 4: 테스트 데이터 생성
+```bash
+python generate_test_data.py
+```
+다양한 애플리케이션과 리전에서 샘플 Bedrock API 호출을 생성합니다.
+
+#### Step 5: Streamlit 대시보드 실행
+```bash
+streamlit run bedrock_tracker.py
+```
+웹 브라우저가 자동으로 열리며 대시보드에 접속됩니다.
+
+### 대시보드 사용법
+
+1. **리전 선택**
+   - 사이드바에서 분석할 AWS 리전 선택
+
+2. **날짜 범위 설정**
+   - 시작 날짜와 종료 날짜 선택
+
+3. **데이터 분석 실행**
+   - "🔍 데이터 분석" 버튼 클릭
+
+4. **결과 확인**
+   - 전체 요약: 총 API 호출, 토큰, 비용
+   - 사용자별 분석: 상위 사용자 및 비용
+   - 애플리케이션별 상세 분석: Role 기반 앱별 통계
+   - 모델별 사용 통계: 모델 호출 비율
+   - 시간 패턴 분석: 일별/시간별 차트
+
+---
+
+## 소스코드 상세 설명
+
+### 1. setup_athena_bucket.py
+
+**목적**: 다중 리전 Athena 분석 환경을 자동으로 구축하는 통합 설정 스크립트
+
+**주요 함수**:
+
+#### `get_account_id()`
+```python
+def get_account_id():
+    return boto3.client('sts').get_caller_identity()['Account']
+```
+- AWS STS를 통해 현재 계정 ID 조회
+- 리전별 버킷명 생성에 사용
+
+#### `create_bucket_if_not_exists(s3_client, bucket_name, region)`
+```python
+def create_bucket_if_not_exists(s3_client, bucket_name, region):
+    try:
+        if region == 'us-east-1':
+            s3_client.create_bucket(Bucket=bucket_name)
+        else:
+            s3_client.create_bucket(
+                Bucket=bucket_name,
+                CreateBucketConfiguration={'LocationConstraint': region}
+            )
+```
+- S3 버킷 생성 (이미 존재하면 스킵)
+- us-east-1은 LocationConstraint 불필요
+- 다른 리전은 명시적 LocationConstraint 필요
+
+#### `create_glue_resource(glue_client, resource_type, name, config)`
+```python
+def create_glue_resource(glue_client, resource_type, name, config):
+    try:
+        if resource_type == 'database':
+            glue_client.create_database(DatabaseInput=config)
+        else:
+            glue_client.create_table(**config)
+```
+- Glue 데이터베이스 및 테이블 생성
+- 파티션 키: year, month, day
+
+#### `setup_region(region, account_id)`
+리전별 전체 설정을 수행하는 핵심 함수:
+```python
+def setup_region(region, account_id):
+    # 1. Analytics 버킷 생성
+    analytics_bucket = f"bedrock-analytics-{account_id}-{region}"
+    create_bucket_if_not_exists(s3, analytics_bucket, region)
+
+    # 2. Glue 데이터베이스 생성
+    create_glue_resource(glue, 'database', 'bedrock_analytics', {...})
+
+    # 3. Bedrock 로깅 설정 확인
+    config = bedrock.get_model_invocation_logging_configuration()
+
+    # 4. Glue 테이블 생성 (파티션 포함)
+    create_glue_resource(glue, 'table', 'bedrock_invocation_logs', {...})
+
+    # 5. 오늘 날짜 파티션 추가
+    partition_query = f"""
+    ALTER TABLE bedrock_analytics.bedrock_invocation_logs
+    ADD IF NOT EXISTS PARTITION (year='{year}', month='{month}', day='{day}')
+    """
+
+    # 6. 데이터 존재 테스트
+    test_query = "SELECT COUNT(*) FROM bedrock_invocation_logs..."
+```
+
+**실행 플로우**:
+1. 6개 리전 순회
+2. 각 리전에 Analytics 버킷 생성
+3. Glue Catalog 구성
+4. Athena 쿼리 테스트
+
+---
+
+### 2. check_bedrock_logging.py
+
+**목적**: Bedrock Model Invocation Logging 설정 상태 확인
+
+**주요 로직**:
+```python
+bedrock = boto3.client('bedrock', region_name='us-east-1')
+
+config = bedrock.get_model_invocation_logging_configuration()
+s3_config = config.get('loggingConfig', {}).get('s3Config', {})
+
+if s3_config:
+    print(f"- S3 버킷: {s3_config.get('bucketName')}")
+    print(f"- 프리픽스: {s3_config.get('keyPrefix')}")
+
+    # 버킷 리전 확인
+    location = s3.get_bucket_location(Bucket=bucket_name)
+    bucket_region = location['LocationConstraint'] or 'us-east-1'
+```
+
+**출력 예시**:
+```
+현재 Bedrock 로깅 설정:
+- S3 버킷: bedrock-logs-mycompany
+- 프리픽스: bedrock-logs/
+- 버킷 리전: us-east-1
+
+다른 리전에서 동일한 설정 확인:
+- ap-northeast-2: bedrock-logs-mycompany
+- eu-west-1: bedrock-logs-mycompany
+```
+
+---
+
+### 3. verify_bedrock_permissions.py
+
+**목적**: IAM Role의 다중 리전 Bedrock 권한 검증
+
+**주요 함수**:
+
+#### `test_bedrock_permissions()`
+```python
+def test_bedrock_permissions():
+    regions = ['us-east-1', 'us-west-2', 'ap-northeast-1',
+               'ap-northeast-2', 'ap-southeast-1']
+
+    roles = [
+        'CustomerServiceApp-BedrockRole',
+        'DataAnalysisApp-BedrockRole',
+        'ChatbotApp-BedrockRole',
+        'DocumentProcessorApp-BedrockRole'
+    ]
+
+    for role_name in roles:
+        # Role Assume
+        assumed_role = sts.assume_role(
+            RoleArn=f"arn:aws:iam::{account_id}:role/{role_name}",
+            RoleSessionName=f"test-session-{role_name}"
+        )
+
+        # 각 리전에서 Bedrock 테스트
+        for region in regions:
+            bedrock = boto3.client(
+                'bedrock',
+                region_name=region,
+                aws_access_key_id=credentials['AccessKeyId'],
+                aws_secret_access_key=credentials['SecretAccessKey'],
+                aws_session_token=credentials['SessionToken']
+            )
+
+            # Foundation models 조회
+            response = bedrock.list_foundation_models()
+            model_count = len(response.get('modelSummaries', []))
+            print(f"✅ {region}: {model_count} models available")
+```
+
+**검증 항목**:
+- IAM Role Assume 가능 여부
+- 리전별 Bedrock API 접근 가능 여부
+- 사용 가능한 모델 수 확인
+
+**출력 예시**:
+```
+Testing role: CustomerServiceApp-BedrockRole
+  ✅ Successfully assumed role
+    ✅ us-east-1: 100 models available
+    ✅ us-west-2: 109 models available
+    ✅ ap-northeast-1: 33 models available
+    ✅ ap-northeast-2: 18 models available
+    ✅ ap-southeast-1: 16 models available
+```
+
+---
+
+### 4. generate_test_data.py
+
+**목적**: 다중 리전에서 여러 애플리케이션 시뮬레이션을 통한 테스트 데이터 생성
+
+**테스트 시나리오 구조**:
+```python
+TEST_SCENARIOS = [
     {
-      "Effect": "Allow",
-      "Action": [
-        "cloudtrail:LookupEvents",
-        "cloudwatch:GetMetricStatistics",
-        "bedrock:ListFoundationModels",
-        "sts:AssumeRole"
-      ],
-      "Resource": "*"
-    }
-  ]
+        'type': 'role',  # 또는 'useragent'
+        'name': 'CustomerServiceApp-BedrockRole',
+        'role_arn': f'arn:aws:iam::{ACCOUNT_ID}:role/CustomerServiceApp-BedrockRole',
+        'region': 'us-east-1',
+        'model': 'us.anthropic.claude-3-haiku-20240307-v1:0',
+        'calls': 3,
+        'prompt': '고객 문의에 대한 답변을 작성해주세요'
+    },
+    # ... 총 13개 시나리오
+]
+```
+
+**주요 함수**:
+
+#### `call_bedrock_with_role(scenario)`
+IAM Role을 Assume하여 Bedrock API 호출:
+```python
+def call_bedrock_with_role(scenario):
+    # 1. STS로 Role Assume
+    assumed_role = sts_client.assume_role(
+        RoleArn=scenario['role_arn'],
+        RoleSessionName=f"{scenario['name']}-test-session"
+    )
+
+    # 2. Assumed role credentials로 Bedrock 클라이언트 생성
+    bedrock = boto3.client(
+        'bedrock-runtime',
+        region_name=scenario['region'],
+        aws_access_key_id=assumed_role['Credentials']['AccessKeyId'],
+        aws_secret_access_key=assumed_role['Credentials']['SecretAccessKey'],
+        aws_session_token=assumed_role['Credentials']['SessionToken']
+    )
+
+    # 3. 지정된 횟수만큼 API 호출
+    for i in range(scenario['calls']):
+        response = bedrock.invoke_model(
+            modelId=scenario['model'],
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 200,
+                "messages": [{"role": "user", "content": scenario['prompt']}]
+            })
+        )
+        time.sleep(0.5)  # Rate limit 방지
+```
+
+#### `call_bedrock_with_useragent(scenario)`
+UserAgent를 설정하여 Bedrock API 호출:
+```python
+def call_bedrock_with_useragent(scenario):
+    # UserAgent 설정
+    config = Config(user_agent_extra=scenario['user_agent'])
+
+    bedrock = boto3.client(
+        'bedrock-runtime',
+        region_name=scenario['region'],
+        config=config
+    )
+
+    # API 호출
+    for i in range(scenario['calls']):
+        response = bedrock.invoke_model(...)
+```
+
+**시나리오 분포**:
+- IAM Role 기반: 8개 (CustomerService, DataAnalysis, DocumentProcessor, etc.)
+- UserAgent 기반: 5개 (MobileApp, WebPortal, BackendAPI, etc.)
+- 리전별: us-east-1(4), us-west-2(2), ap-northeast-1(2), ap-northeast-2(2), ap-southeast-1(2)
+
+**출력 예시**:
+```
+🔐 Testing: CustomerServiceApp-BedrockRole (IAM Role)
+   Region: us-east-1
+   Model: claude-3-haiku
+   Calls: 3
+   ✅ Call 1/3 succeeded
+   ✅ Call 2/3 succeeded
+   ✅ Call 3/3 succeeded
+   📊 Result: 3/3 calls succeeded
+
+📊 Results by Region:
+   • us-east-1: 15 successful calls
+   • us-west-2: 4 successful calls
+   • ap-northeast-1: 5 successful calls
+```
+
+---
+
+### 5. bedrock_tracker.py
+
+**목적**: Athena 기반 실시간 사용량 분석 대시보드
+
+**핵심 클래스**: `BedrockAthenaTracker`
+
+#### 초기화 및 설정
+```python
+class BedrockAthenaTracker:
+    def __init__(self, region=default_region):
+        self.region = region
+        self.athena = boto3.client("athena", region_name=region)
+        sts_client = boto3.client("sts", region_name=region)
+        self.account_id = sts_client.get_caller_identity()["Account"]
+        self.results_bucket = f"bedrock-analytics-{self.account_id}-{self.region}"
+```
+
+#### `get_current_logging_config()`
+Model Invocation Logging 설정 조회:
+```python
+def get_current_logging_config(self) -> Dict:
+    bedrock = boto3.client("bedrock", region_name=self.region)
+    response = bedrock.get_model_invocation_logging_configuration()
+
+    if "loggingConfig" in response:
+        config = response["loggingConfig"]
+        if "s3Config" in config:
+            return {
+                "type": "s3",
+                "bucket": config["s3Config"].get("bucketName", ""),
+                "prefix": config["s3Config"].get("keyPrefix", ""),
+                "status": "enabled"
+            }
+```
+
+#### `execute_athena_query(query, database)`
+Athena 쿼리 실행 및 결과 반환:
+```python
+def execute_athena_query(self, query: str, database: str = "bedrock_analytics") -> pd.DataFrame:
+    # 1. 쿼리 실행
+    response = self.athena.start_query_execution(
+        QueryString=query,
+        QueryExecutionContext={"Database": database},
+        ResultConfiguration={
+            "OutputLocation": f"s3://{self.results_bucket}/query-results/"
+        }
+    )
+
+    query_id = response["QueryExecutionId"]
+
+    # 2. 쿼리 완료 대기 (최대 60초)
+    for i in range(60):
+        result = self.athena.get_query_execution(QueryExecutionId=query_id)
+        status = result["QueryExecution"]["Status"]["State"]
+
+        if status == "SUCCEEDED":
+            break
+        elif status in ["FAILED", "CANCELLED"]:
+            raise Exception(f"Query failed: {error}")
+
+        time.sleep(1)
+
+    # 3. 결과 조회 및 DataFrame 변환
+    result_response = self.athena.get_query_results(QueryExecutionId=query_id)
+
+    columns = [col["Label"] for col in result_response["ResultSet"]["ResultSetMetadata"]["ColumnInfo"]]
+    rows = []
+
+    for row in result_response["ResultSet"]["Rows"][1:]:  # 헤더 제외
+        row_data = [field.get("VarCharValue", "") for field in row["Data"]]
+        rows.append(row_data)
+
+    return pd.DataFrame(rows, columns=columns)
+```
+
+#### 분석 쿼리 함수들
+
+**사용자별 비용 분석**:
+```python
+def get_user_cost_analysis(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    query = f"""
+    SELECT
+        CASE
+            WHEN identity.arn LIKE '%assumed-role%' THEN
+                regexp_extract(identity.arn, 'assumed-role/([^/]+)')
+            WHEN identity.arn LIKE '%user%' THEN
+                regexp_extract(identity.arn, 'user/([^/]+)')
+            ELSE 'Unknown'
+        END as user_or_app,
+        COUNT(*) as call_count,
+        SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+        SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+    FROM bedrock_invocation_logs
+    WHERE year >= '{start_date.year}'
+        AND month >= '{start_date.month:02d}'
+        AND day >= '{start_date.day:02d}'
+    GROUP BY identity.arn
+    ORDER BY call_count DESC
+    """
+    return self.execute_athena_query(query)
+```
+
+**모델별 사용 통계**:
+```python
+def get_model_usage_stats(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    query = f"""
+    SELECT
+        regexp_extract(modelId, '([^/]+)$') as model_name,
+        COUNT(*) as call_count,
+        AVG(CAST(input.inputTokenCount AS DOUBLE)) as avg_input_tokens,
+        AVG(CAST(output.outputTokenCount AS DOUBLE)) as avg_output_tokens,
+        SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+        SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+    FROM bedrock_invocation_logs
+    WHERE year >= '{start_date.year}'
+    GROUP BY modelId
+    ORDER BY call_count DESC
+    """
+    return self.execute_athena_query(query)
+```
+
+**일별 사용 패턴**:
+```python
+def get_daily_usage_pattern(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    query = f"""
+    SELECT
+        year, month, day,
+        COUNT(*) as call_count,
+        SUM(CAST(input.inputTokenCount AS BIGINT)) as total_input_tokens,
+        SUM(CAST(output.outputTokenCount AS BIGINT)) as total_output_tokens
+    FROM bedrock_invocation_logs
+    WHERE year >= '{start_date.year}'
+    GROUP BY year, month, day
+    ORDER BY year, month, day
+    """
+    return self.execute_athena_query(query)
+```
+
+#### 비용 계산
+```python
+MODEL_PRICING = {
+    "claude-3-haiku-20240307": {
+        "input": 0.00025 / 1000,
+        "output": 0.00125 / 1000,
+    },
+    "claude-3-5-sonnet-20241022": {
+        "input": 0.003 / 1000,
+        "output": 0.015 / 1000
+    },
+    # ... 전체 모델 가격표
 }
+
+def get_model_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
+    # 모델 ID에서 모델명 추출
+    model_name = model_id.split(".")[-1].split("-v")[0]
+
+    # 가격 테이블에서 찾기
+    for key, pricing in MODEL_PRICING.items():
+        if key in model_name:
+            cost = (input_tokens * pricing["input"]) + (output_tokens * pricing["output"])
+            return cost
+
+    # 기본 가격 (Claude 3 Haiku)
+    default_cost = (input_tokens * 0.00025 / 1000) + (output_tokens * 0.00125 / 1000)
+    return default_cost
 ```
 
-### CloudTrail 설정
+#### Streamlit UI 구성
+```python
+def main():
+    st.set_page_config(page_title="Bedrock Analytics Dashboard", page_icon="📊", layout="wide")
+    st.title("📊 AWS Bedrock Analytics Dashboard")
 
-실제 토큰 데이터를 추출하려면:
-1. CloudTrail에서 **데이터 이벤트** 로깅 활성화
-2. Bedrock API 호출(`InvokeModel`, `InvokeModelWithResponseStream`) 로깅 설정
-3. `responseElements` 포함 옵션 활성화
+    # 사이드바 설정
+    selected_region = st.sidebar.selectbox("리전 선택", options=list(REGIONS.keys()))
+    start_date = st.sidebar.date_input("시작 날짜", value=datetime.now() - timedelta(days=7))
+    end_date = st.sidebar.date_input("종료 날짜", value=datetime.now())
 
-## 주의사항
+    # 로깅 설정 확인
+    tracker = BedrockAthenaTracker(region=selected_region)
+    current_config = tracker.get_current_logging_config()
 
-### 일반 사항
-- CloudTrail과 CloudWatch에 대한 적절한 IAM 권한이 필요합니다
-- 대량의 데이터 조회 시 시간이 소요될 수 있습니다
-- 리전별 요금은 2024년 기준이며 실제 요금과 다를 수 있습니다
+    # 분석 실행
+    if st.sidebar.button("🔍 데이터 분석"):
+        # 전체 요약
+        summary = tracker.get_total_summary(start_date, end_date)
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("총 API 호출", f"{summary['total_calls']:,}")
+        col2.metric("총 Input 토큰", f"{summary['total_input_tokens']:,}")
+        col3.metric("총 Output 토큰", f"{summary['total_output_tokens']:,}")
+        col4.metric("총 비용", f"${summary['total_cost_usd']:.4f}")
 
-### CloudTrail 관련
-- CloudTrail 이벤트는 최대 15분 지연될 수 있습니다
-- CloudTrail의 `lookup_events`는 기본적으로 90일간의 데이터만 조회 가능합니다
-- 대량의 이벤트 조회 시 API throttling이 발생할 수 있습니다
+        # 사용자별 분석
+        user_df = tracker.get_user_cost_analysis(start_date, end_date)
+        st.dataframe(user_df, use_container_width=True)
 
-### 비용 추정 정확도
-- CloudTrail에 토큰 데이터가 없는 경우, 추정치는 **참고용**으로만 사용하세요
-- 정확한 비용 계산을 위해서는 CloudTrail에서 `responseElements` 로깅을 활성화하는 것을 강력히 권장합니다
-- 각 API 호출의 토큰 사용량이 크게 다른 경우, 추정 오차가 클 수 있습니다
-
-## 파일 구조
-
-```
-bedrock_usage/
-├── bedrock_tracker.py          # Streamlit Web UI
-├── bedrock_tracker_cli.py      # CLI 버전
-├── setup_test_roles.py         # 테스트 IAM Role 생성/삭제
-├── generate_test_data.py       # 테스트 데이터 생성
-├── custom_metrics_example.py   # CloudWatch 커스텀 메트릭 예시
-├── inspect_cloudtrail.py       # CloudTrail 이벤트 상세 조사 도구
-├── requirements.txt            # Python 의존성
-├── README.md                   # 본 문서
-└── blog.md                     # 기술 블로그 포스트
+        # 차트 표시
+        fig = px.bar(user_df.head(10), x="user_or_app", y="estimated_cost_usd")
+        st.plotly_chart(fig, use_container_width=True)
 ```
 
-## 트러블슈팅
+---
 
-### 토큰 데이터가 표시되지 않음
+## 시스템 플로우
 
-**증상**: "Events with token data: 0 / X"
+### 데이터 수집 플로우
+
+```
+1. 애플리케이션이 Bedrock API 호출
+   ↓
+2. Model Invocation Logging이 자동으로 로그 생성
+   ↓
+3. S3 버킷에 JSON 로그 저장
+   ├─ AWSLogs/{account-id}/BedrockModelInvocationLogs/
+   └─ {region}/{year}/{month}/{day}/{timestamp}.json.gz
+   ↓
+4. Glue Catalog가 파티션 인식
+   ↓
+5. Athena에서 SQL 쿼리 가능
+```
+
+### 분석 실행 플로우
+
+```
+1. Streamlit UI에서 "데이터 분석" 버튼 클릭
+   ↓
+2. BedrockAthenaTracker 초기화
+   ├─ 리전 설정
+   ├─ Account ID 조회
+   └─ Results 버킷 설정
+   ↓
+3. 로깅 설정 확인
+   └─ get_current_logging_config()
+   ↓
+4. 여러 분석 쿼리 병렬 실행
+   ├─ get_total_summary()
+   ├─ get_user_cost_analysis()
+   ├─ get_user_app_detail_analysis()
+   ├─ get_model_usage_stats()
+   ├─ get_daily_usage_pattern()
+   └─ get_hourly_usage_pattern()
+   ↓
+5. Athena 쿼리 실행 및 대기
+   ├─ start_query_execution()
+   ├─ get_query_execution() (polling)
+   └─ get_query_results()
+   ↓
+6. DataFrame으로 변환
+   ↓
+7. 비용 계산
+   └─ calculate_cost_for_dataframe()
+   ↓
+8. Plotly 차트 생성 및 표시
+   ├─ 사용자별 비용 Bar Chart
+   ├─ 모델별 호출 Pie Chart
+   ├─ 일별 사용 Line Chart
+   └─ 시간별 사용 Line Chart
+```
+
+### 비용 계산 플로우
+
+```
+1. Athena 쿼리로 원시 데이터 조회
+   ├─ model_name
+   ├─ total_input_tokens
+   └─ total_output_tokens
+   ↓
+2. calculate_cost_for_dataframe() 호출
+   ↓
+3. 각 행에 대해 반복
+   ├─ 모델 ID 추출
+   ├─ MODEL_PRICING 테이블 조회
+   ├─ Input 비용 = input_tokens × input_price
+   ├─ Output 비용 = output_tokens × output_price
+   └─ 총 비용 = Input 비용 + Output 비용
+   ↓
+4. DataFrame에 'estimated_cost_usd' 컬럼 추가
+   ↓
+5. UI에 표시
+```
+
+---
+
+## 데모
+
+### 시스템 데모 영상
+
+<!-- YouTube 영상 URL을 여기에 추가하세요 -->
+[![Bedrock Usage Analytics Demo]](https://youtu.be/zWQ5dvICrAQ)
+
+**데모 영상에서 확인할 수 있는 내용**:
+- 초기 환경 설정 과정
+- 테스트 데이터 생성
+- Streamlit 대시보드 둘러보기
+- 실시간 비용 분석
+- 리전별/모델별 사용 패턴 확인
+
+### 스크린샷
+
+#### 전체 요약 대시보드
+![Dashboard Overview](screenshots/dashboard_overview.png)
+
+#### 사용자별 비용 분석
+![User Cost Analysis](screenshots/user_cost_analysis.png)
+
+#### 모델별 사용 통계
+![Model Usage Stats](screenshots/model_usage_stats.png)
+
+
+---
+
+## 문제 해결
+
+### 로그가 생성되지 않는 경우
+
+**증상**: S3 버킷에 로그 파일이 없음
 
 **해결방법**:
-1. CloudTrail에서 데이터 이벤트 로깅이 활성화되어 있는지 확인
-2. `responseElements` 포함 옵션이 활성화되어 있는지 확인
-3. CloudWatch 메트릭을 fallback으로 사용 (자동)
-
-### 애플리케이션이 "Unknown"으로 표시됨
-
-**원인**:
-- IAM Role 이름에 `-BedrockRole` 패턴이 없음
-- UserAgent에 애플리케이션 식별자가 없음
-
-**해결방법**:
-- IAM Role 이름을 `AppName-BedrockRole` 형식으로 변경
-- 또는 UserAgent에 애플리케이션 이름 추가
-
-### CloudTrail 이벤트가 표시되지 않음
-
-**원인**:
-- CloudTrail 이벤트 인덱싱 지연 (최대 15분)
-- 잘못된 리전 선택
-- 권한 부족
-
-**해결방법**:
-1. 2-3분 후 다시 시도
-2. Bedrock API를 호출한 리전이 선택되어 있는지 확인
-3. IAM 권한에 `cloudtrail:LookupEvents` 포함 확인
-
-### CloudWatch 커스텀 메트릭이 보이지 않음
-
-**증상**: CloudWatch 콘솔에서 Custom/BedrockUsage 네임스페이스가 없음
-
-**원인**:
-- 메트릭 전송 후 1-2분 지연
-- 메트릭 전송 실패
-- 권한 부족
-
-**해결방법**:
-1. 메트릭 전송 후 2-3분 대기
-2. 애플리케이션 로그에서 에러 확인
-3. IAM 권한에 `cloudwatch:PutMetricData` 포함 확인
-4. 테스트 스크립트 실행:
+1. Bedrock 로깅 설정 확인
    ```bash
-   python custom_metrics_example.py
+   python check_bedrock_logging.py
    ```
 
-### 커스텀 메트릭 비용이 높음
+2. S3 버킷 정책 확인
+   ```json
+   {
+     "Effect": "Allow",
+     "Principal": {"Service": "bedrock.amazonaws.com"},
+     "Action": "s3:PutObject",
+     "Resource": "arn:aws:s3:::your-bucket/*"
+   }
+   ```
 
-**증상**: CloudWatch 비용이 예상보다 높게 나옴
+3. Bedrock API 호출 리전과 로깅 설정 리전 일치 확인
 
-**원인**:
-- 모든 API 호출마다 메트릭 전송
-- 불필요하게 많은 차원(Dimension) 사용
+### Athena 쿼리 실패
+
+**증상**: "HIVE_PARTITION_SCHEMA_MISMATCH" 오류
 
 **해결방법**:
-1. **샘플링 적용** - 매 N번째 호출만 전송:
-   ```python
-   if call_count % 10 == 0:  # 10번에 1번만 전송
-       self._send_custom_metrics(...)
+1. 파티션 재생성
+   ```sql
+   ALTER TABLE bedrock_invocation_logs DROP PARTITION (year='2025', month='10', day='18');
+   ALTER TABLE bedrock_invocation_logs ADD PARTITION (year='2025', month='10', day='18')
+   LOCATION 's3://bucket/path/2025/10/18/';
    ```
 
-2. **집계 후 전송** - 일정 시간 동안 집계 후 일괄 전송:
-   ```python
-   # 5분마다 집계된 메트릭 전송
-   accumulated_tokens += current_tokens
-   if time.time() - last_send_time > 300:
-       send_aggregated_metrics()
+2. Glue 테이블 스키마 확인
+   ```bash
+   aws glue get-table --database-name bedrock_analytics --name bedrock_invocation_logs
    ```
 
-3. **차원 수 줄이기** - 필수 차원만 사용
-   ```python
-   # Before: 4개 차원 (Application, ModelId, Region, User)
-   # After: 2개 차원 (Application, ModelId)
+### 대시보드가 로딩되지 않는 경우
+
+**증상**: Streamlit 앱이 무한 로딩
+
+**해결방법**:
+1. AWS 자격증명 확인
+   ```bash
+   aws sts get-caller-identity
    ```
+
+2. 네트워크 연결 확인
+   ```bash
+   aws athena list-work-groups
+   ```
+
+3. 로그 확인
+   ```bash
+   cat log/bedrock_tracker_*.log
+   ```
+
+### 비용이 잘못 계산되는 경우
+
+**증상**: 예상과 다른 비용 표시
+
+**해결방법**:
+1. MODEL_PRICING 테이블 확인 (bedrock_tracker.py:44-64)
+2. 최신 Bedrock 가격표와 비교
+3. 모델 ID 매칭 로직 확인
+   ```python
+   logger.debug(f"Model: {model_id}, Cost: ${cost:.6f}")
+   ```
+
+### IAM Role Assume 실패
+
+**증상**: "AccessDenied" 또는 "AssumeRole failed"
+
+**해결방법**:
+1. Trust Policy 확인
+   ```json
+   {
+     "Effect": "Allow",
+     "Principal": {"AWS": "arn:aws:iam::ACCOUNT:user/YOUR_USER"},
+     "Action": "sts:AssumeRole"
+   }
+   ```
+
+2. IAM 권한 확인
+   ```bash
+   python verify_bedrock_permissions.py
+   ```
+
+---
+
+## 추가 리소스
+
+### 관련 문서
+- [AWS Bedrock Model Invocation Logging](https://docs.aws.amazon.com/bedrock/latest/userguide/model-invocation-logging.html)
+- [Amazon Athena Documentation](https://docs.aws.amazon.com/athena/)
+- [AWS Glue Data Catalog](https://docs.aws.amazon.com/glue/latest/dg/catalog-and-crawler.html)
+
+### 비용 정보
+- [AWS Bedrock Pricing](https://aws.amazon.com/bedrock/pricing/)
+- [Amazon S3 Pricing](https://aws.amazon.com/s3/pricing/)
+- [Amazon Athena Pricing](https://aws.amazon.com/athena/pricing/)
+
+### 지원
+- GitHub Issues: [Create an issue](https://github.com/your-repo/issues)
+- AWS Support: [Contact AWS Support](https://aws.amazon.com/support/)
+
+---
 
 ## 라이선스
 
 MIT License
 
-## 기여
+Copyright (c) 2025
 
-이슈 및 PR을 환영합니다!
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+**프로젝트 작성자**: AWS Solutions Architect
+**마지막 업데이트**: 2025-10-18
+**버전**: 1.0.0
