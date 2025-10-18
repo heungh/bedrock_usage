@@ -726,28 +726,59 @@ def main():
             "👈 왼쪽 사이드바에서 리전과 날짜 범위를 선택한 후 '데이터 분석' 버튼을 클릭하세요."
         )
 
-        st.markdown("### 🚀 Athena 기반 분석의 장점")
+        st.markdown("### 🛠️ 환경 설정 가이드")
 
+        st.markdown("#### 1️⃣ 환경 요구사항")
         st.markdown(
             """
-        - **🚀 고성능**: 페타바이트 규모 데이터 처리 가능
-        - **💰 비용 효율적**: 스캔한 데이터량만큼만 과금
-        - **📊 SQL 쿼리**: 표준 SQL로 복잡한 분석 가능
-        - **🔗 QuickSight 연동**: 실시간 대시보드 구축 가능
-        - **📈 확장성**: 데이터 증가에 따른 성능 저하 없음
+        **AWS 권한**: 다음 서비스에 대한 권한이 필요합니다
+        - Bedrock: InvokeModel, Get/PutModelInvocationLoggingConfiguration
+        - S3: GetObject, ListBucket, PutObject, CreateBucket
+        - Athena: StartQueryExecution, GetQueryExecution, GetQueryResults
+        - Glue: CreateDatabase, CreateTable, GetDatabase, GetTable
+
+        **Python 환경**:
+        - Python 3.8 이상
+        - boto3, streamlit, pandas, plotly
         """
         )
 
-        st.markdown("### 🛠️ 설정이 필요한 경우")
-
+        st.markdown("#### 2️⃣ 설치 방법")
         st.code(
             """
-# Bedrock Analytics 통합 설정 실행
-python setup_bedrock_analytics.py
+# 1. 패키지 설치
+pip install -r requirements.txt
 
-# 또는 커스텀 버킷명으로 설정
-python setup_bedrock_analytics.py --bucket my-bedrock-logs
-        """
+# 2. AWS 자격증명 설정
+aws configure
+# 또는 환경변수 설정
+export AWS_ACCESS_KEY_ID=your_key
+export AWS_SECRET_ACCESS_KEY=your_secret
+export AWS_DEFAULT_REGION=us-east-1
+        """,
+            language="bash"
+        )
+
+        st.markdown("#### 3️⃣ 초기 설정 단계")
+        st.code(
+            """
+# Step 1: Athena 분석 환경 구축
+python setup_athena_bucket.py
+
+# Step 2: Bedrock 로깅 설정 확인 및 활성화
+python check_bedrock_logging.py
+python setup_bedrock_logging.py
+
+# Step 3: IAM Role 권한 검증
+python verify_bedrock_permissions.py
+
+# Step 4: 테스트 데이터 생성 (선택사항)
+python generate_test_data.py
+
+# Step 5: 대시보드 실행
+streamlit run bedrock_tracker.py
+        """,
+            language="bash"
         )
 
         st.markdown("### 📋 지원 모델")
