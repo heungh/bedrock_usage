@@ -44,23 +44,112 @@ def setup_logger():
 # 글로벌 로거
 logger = setup_logger()
 
-# AWS Bedrock 모델 가격 테이블 (모든 리전 동일)
+# AWS Bedrock 모델 가격 테이블 (리전별)
+# 참고: 최신 가격은 https://aws.amazon.com/bedrock/pricing/ 에서 확인하세요
+# 가격은 USD 기준이며, 1000 토큰당 가격입니다
 MODEL_PRICING = {
-    # Claude 3 모델
-    'claude-3-haiku-20240307': {'input': 0.00025 / 1000, 'output': 0.00125 / 1000},
-    'claude-3-sonnet-20240229': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    'claude-3-opus-20240229': {'input': 0.015 / 1000, 'output': 0.075 / 1000},
-    # Claude 3.5 모델
-    'claude-3-5-haiku-20241022': {'input': 0.0008 / 1000, 'output': 0.004 / 1000},
-    'claude-3-5-sonnet-20240620': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    'claude-3-5-sonnet-20241022': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    # Claude 3.7 모델
-    'claude-3-7-sonnet-20250219': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    # Claude 4 모델
-    'claude-sonnet-4-20250514': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    'claude-sonnet-4-5-20250929': {'input': 0.003 / 1000, 'output': 0.015 / 1000},
-    'claude-opus-4-20250514': {'input': 0.015 / 1000, 'output': 0.075 / 1000},
-    'claude-opus-4-1-20250808': {'input': 0.015 / 1000, 'output': 0.075 / 1000}
+    # 기본 가격 (대부분의 리전에 적용)
+    "default": {
+        # Claude 3 모델
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        # Claude 3.5 모델
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        # Claude 3.7 모델
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        # Claude 4 모델
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # US East (N. Virginia) - us-east-1
+    "us-east-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # US West (Oregon) - us-west-2
+    "us-west-2": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Europe (Frankfurt) - eu-central-1
+    "eu-central-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Tokyo) - ap-northeast-1
+    "ap-northeast-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Seoul) - ap-northeast-2
+    "ap-northeast-2": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Singapore) - ap-southeast-1
+    "ap-southeast-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
 }
 
 # 리전 설정
@@ -73,21 +162,45 @@ REGIONS = {
     "ap-southeast-1": "Asia Pacific (Singapore)",
 }
 
-def get_model_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
-    """모델별 비용 계산"""
-    logger.debug(f"Calculating cost for model: {model_id}, input: {input_tokens}, output: {output_tokens}")
+def get_model_cost(model_id: str, input_tokens: int, output_tokens: int, region: str = "default") -> float:
+    """모델별 비용 계산 (리전별 가격 반영)
 
+    Args:
+        model_id: Bedrock 모델 ID (예: us.anthropic.claude-3-haiku-20240307-v1:0)
+        input_tokens: 입력 토큰 수
+        output_tokens: 출력 토큰 수
+        region: AWS 리전 (예: us-east-1, ap-northeast-2)
+
+    Returns:
+        float: 계산된 비용 (USD)
+    """
+    logger.debug(
+        f"Calculating cost for model: {model_id}, input: {input_tokens}, output: {output_tokens}, region: {region}"
+    )
+
+    # 모델 ID에서 모델명 추출 (예: us.anthropic.claude-3-haiku-20240307-v1:0 -> claude-3-haiku-20240307)
     model_name = model_id.split('.')[-1].split('-v')[0] if '.' in model_id else model_id
 
-    for key, pricing in MODEL_PRICING.items():
+    # 리전별 가격 테이블 선택 (해당 리전이 없으면 default 사용)
+    region_pricing = MODEL_PRICING.get(region, MODEL_PRICING["default"])
+
+    # 가격 테이블에서 모델 찾기
+    for key, pricing in region_pricing.items():
         if key in model_name:
-            cost = (input_tokens * pricing['input']) + (output_tokens * pricing['output'])
-            logger.debug(f"Model: {key}, Cost: ${cost:.6f}")
+            # 가격은 1000 토큰당 가격이므로 1000으로 나눔
+            cost = (input_tokens * pricing["input"] / 1000) + (
+                output_tokens * pricing["output"] / 1000
+            )
+            logger.debug(f"Model: {key}, Region: {region}, Cost: ${cost:.6f}")
             return cost
 
     # 기본 가격 (Claude 3 Haiku)
-    logger.warning(f"Unknown model: {model_id}, using default pricing")
-    return (input_tokens * 0.00025 / 1000) + (output_tokens * 0.00125 / 1000)
+    logger.warning(f"Unknown model: {model_id}, using default pricing (Claude 3 Haiku)")
+    default_pricing = MODEL_PRICING["default"]["claude-3-haiku-20240307"]
+    default_cost = (input_tokens * default_pricing["input"] / 1000) + (
+        output_tokens * default_pricing["output"] / 1000
+    )
+    return default_cost
 
 
 class BedrockAthenaTracker:
@@ -181,9 +294,11 @@ class BedrockAthenaTracker:
             print(f"❌ Athena 쿼리 실행 실패: {str(e)}", file=sys.stderr)
             return pd.DataFrame()
 
-    def get_total_summary(self, start_date: datetime, end_date: datetime) -> Dict:
+    def get_total_summary(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> Dict:
         """전체 요약 통계"""
-        logger.info(f"Getting total summary from {start_date} to {end_date}")
+        logger.info(f"Getting total summary from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -193,6 +308,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         """
 
         df = self.execute_athena_query(query)
@@ -210,9 +326,11 @@ class BedrockAthenaTracker:
             logger.warning("No data found for summary")
             return {'total_calls': 0, 'total_input_tokens': 0, 'total_output_tokens': 0, 'total_cost_usd': 0.0}
 
-    def get_user_cost_analysis(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_user_cost_analysis(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> pd.DataFrame:
         """사용자별 비용 분석"""
-        logger.info(f"Getting user cost analysis from {start_date} to {end_date}")
+        logger.info(f"Getting user cost analysis from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -229,15 +347,18 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY identity.arn
         ORDER BY call_count DESC
         """
 
         return self.execute_athena_query(query)
 
-    def get_user_app_detail_analysis(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_user_app_detail_analysis(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> pd.DataFrame:
         """유저별 애플리케이션별 상세 분석"""
-        logger.info(f"Getting user-app detail analysis from {start_date} to {end_date}")
+        logger.info(f"Getting user-app detail analysis from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -255,15 +376,18 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY identity.arn, modelId
         ORDER BY user_or_app, call_count DESC
         """
 
         return self.execute_athena_query(query)
 
-    def get_model_usage_stats(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_model_usage_stats(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> pd.DataFrame:
         """모델별 사용 통계"""
-        logger.info(f"Getting model usage stats from {start_date} to {end_date}")
+        logger.info(f"Getting model usage stats from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -276,15 +400,18 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY modelId
         ORDER BY call_count DESC
         """
 
         return self.execute_athena_query(query)
 
-    def get_daily_usage_pattern(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_daily_usage_pattern(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> pd.DataFrame:
         """일별 사용 패턴"""
-        logger.info(f"Getting daily usage pattern from {start_date} to {end_date}")
+        logger.info(f"Getting daily usage pattern from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -295,15 +422,18 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY year, month, day
         ORDER BY year, month, day
         """
 
         return self.execute_athena_query(query)
 
-    def get_hourly_usage_pattern(self, start_date: datetime, end_date: datetime) -> pd.DataFrame:
+    def get_hourly_usage_pattern(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> pd.DataFrame:
         """시간별 사용 패턴 - timestamp에서 hour 추출"""
-        logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}")
+        logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -317,6 +447,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
         ORDER BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
         """
@@ -324,9 +455,18 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
 
-def calculate_cost_for_dataframe(df: pd.DataFrame, model_col: str = 'model_name') -> pd.DataFrame:
-    """DataFrame에 비용 컬럼 추가"""
-    logger.info(f"Calculating cost for DataFrame with {len(df)} rows")
+def calculate_cost_for_dataframe(df: pd.DataFrame, model_col: str = 'model_name', region: str = "default") -> pd.DataFrame:
+    """DataFrame에 비용 컬럼 추가 (리전별 가격 반영)
+
+    Args:
+        df: 비용을 계산할 DataFrame
+        model_col: 모델명이 있는 컬럼명
+        region: AWS 리전 (예: us-east-1, ap-northeast-2)
+
+    Returns:
+        pd.DataFrame: 비용 컬럼이 추가된 DataFrame
+    """
+    logger.info(f"Calculating cost for DataFrame with {len(df)} rows, region: {region}")
 
     if df.empty:
         return df
@@ -336,11 +476,11 @@ def calculate_cost_for_dataframe(df: pd.DataFrame, model_col: str = 'model_name'
         model = row.get(model_col, '')
         input_tokens = int(row.get('total_input_tokens', 0)) if row.get('total_input_tokens') else 0
         output_tokens = int(row.get('total_output_tokens', 0)) if row.get('total_output_tokens') else 0
-        cost = get_model_cost(model, input_tokens, output_tokens)
+        cost = get_model_cost(model, input_tokens, output_tokens, region)
         costs.append(cost)
 
     df['estimated_cost_usd'] = costs
-    logger.info(f"Total cost calculated: ${sum(costs):.4f}")
+    logger.info(f"Total cost calculated for region {region}: ${sum(costs):.4f}")
     return df
 
 
@@ -419,6 +559,8 @@ def main():
                        help='출력 형식 (기본값: terminal)')
     parser.add_argument('--max-rows', type=int, default=20,
                        help='테이블 최대 행 수 (기본값: 20)')
+    parser.add_argument('--arn-pattern', type=str, default='',
+                       help='ARN 패턴 필터 (예: AmazonQ-CLI, q-cli)')
 
     args = parser.parse_args()
 
@@ -433,10 +575,14 @@ def main():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=args.days)
 
+    arn_pattern = args.arn_pattern if args.arn_pattern else None
+
     print(f"📅 분석 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
     print(f"🌍 리전: {args.region} ({REGIONS[args.region]})")
     print(f"📋 분석 유형: {args.analysis}")
     print(f"📄 출력 형식: {args.format}")
+    if arn_pattern:
+        print(f"🔍 ARN 패턴 필터: '{arn_pattern}'")
     print()
 
     # Tracker 초기화
@@ -466,46 +612,51 @@ def main():
     results = {}
 
     if args.analysis in ['all', 'summary']:
-        summary = tracker.get_total_summary(start_date, end_date)
+        summary = tracker.get_total_summary(start_date, end_date, arn_pattern if arn_pattern else None)
         results['summary'] = summary
 
     if args.analysis in ['all', 'user']:
-        user_df = tracker.get_user_cost_analysis(start_date, end_date)
+        user_df = tracker.get_user_cost_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
         if not user_df.empty:
             # 숫자 변환 및 비용 계산
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in user_df.columns:
                     user_df[col] = pd.to_numeric(user_df[col], errors='coerce').fillna(0)
-            user_df['estimated_cost_usd'] = (
-                user_df['total_input_tokens'] * 0.00025 / 1000 +
-                user_df['total_output_tokens'] * 0.00125 / 1000
-            )
+            # 리전별 가격으로 비용 계산 (사용자별 분석은 모델 정보가 없으므로 기본 Haiku 가격 사용)
+            costs = []
+            for _, row in user_df.iterrows():
+                input_tokens = int(row.get('total_input_tokens', 0)) if row.get('total_input_tokens') else 0
+                output_tokens = int(row.get('total_output_tokens', 0)) if row.get('total_output_tokens') else 0
+                # Claude 3 Haiku를 기본 모델로 사용
+                cost = get_model_cost('claude-3-haiku-20240307', input_tokens, output_tokens, args.region)
+                costs.append(cost)
+            user_df['estimated_cost_usd'] = costs
         results['user'] = user_df
 
     if args.analysis in ['all', 'user-app']:
-        user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date)
+        user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
         if not user_app_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in user_app_df.columns:
                     user_app_df[col] = pd.to_numeric(user_app_df[col], errors='coerce').fillna(0)
-            user_app_df = calculate_cost_for_dataframe(user_app_df)
+            user_app_df = calculate_cost_for_dataframe(user_app_df, region=args.region)
         results['user_app'] = user_app_df
 
     if args.analysis in ['all', 'model']:
-        model_df = tracker.get_model_usage_stats(start_date, end_date)
+        model_df = tracker.get_model_usage_stats(start_date, end_date, arn_pattern if arn_pattern else None)
         if not model_df.empty:
             for col in ['call_count', 'avg_input_tokens', 'avg_output_tokens',
                        'total_input_tokens', 'total_output_tokens']:
                 if col in model_df.columns:
                     model_df[col] = pd.to_numeric(model_df[col], errors='coerce').fillna(0)
-            model_df = calculate_cost_for_dataframe(model_df)
+            model_df = calculate_cost_for_dataframe(model_df, region=args.region)
             # 총 비용 업데이트
             if 'summary' in results:
                 results['summary']['total_cost_usd'] = model_df['estimated_cost_usd'].sum()
         results['model'] = model_df
 
     if args.analysis in ['all', 'daily']:
-        daily_df = tracker.get_daily_usage_pattern(start_date, end_date)
+        daily_df = tracker.get_daily_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
         if not daily_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in daily_df.columns:
@@ -513,7 +664,7 @@ def main():
         results['daily'] = daily_df
 
     if args.analysis in ['all', 'hourly']:
-        hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date)
+        hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
         if not hourly_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in hourly_df.columns:

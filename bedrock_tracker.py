@@ -41,26 +41,112 @@ def setup_logger():
 # 글로벌 로거
 logger = setup_logger()
 
-# AWS Bedrock 모델 가격 테이블 (모든 리전 동일)
+# AWS Bedrock 모델 가격 테이블 (리전별)
+# 참고: 최신 가격은 https://aws.amazon.com/bedrock/pricing/ 에서 확인하세요
+# 가격은 USD 기준이며, 1000 토큰당 가격입니다
 MODEL_PRICING = {
-    # Claude 3 모델
-    "claude-3-haiku-20240307": {
-        "input": 0.00025 / 1000,  # per token
-        "output": 0.00125 / 1000,
+    # 기본 가격 (대부분의 리전에 적용)
+    "default": {
+        # Claude 3 모델
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        # Claude 3.5 모델
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        # Claude 3.7 모델
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        # Claude 4 모델
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
     },
-    "claude-3-sonnet-20240229": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    "claude-3-opus-20240229": {"input": 0.015 / 1000, "output": 0.075 / 1000},
-    # Claude 3.5 모델
-    "claude-3-5-haiku-20241022": {"input": 0.0008 / 1000, "output": 0.004 / 1000},
-    "claude-3-5-sonnet-20240620": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    "claude-3-5-sonnet-20241022": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    # Claude 3.7 모델
-    "claude-3-7-sonnet-20250219": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    # Claude 4 모델
-    "claude-sonnet-4-20250514": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    "claude-sonnet-4-5-20250929": {"input": 0.003 / 1000, "output": 0.015 / 1000},
-    "claude-opus-4-20250514": {"input": 0.015 / 1000, "output": 0.075 / 1000},
-    "claude-opus-4-1-20250808": {"input": 0.015 / 1000, "output": 0.075 / 1000},
+    # US East (N. Virginia) - us-east-1
+    "us-east-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # US West (Oregon) - us-west-2
+    "us-west-2": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Europe (Frankfurt) - eu-central-1
+    "eu-central-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Tokyo) - ap-northeast-1
+    "ap-northeast-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Seoul) - ap-northeast-2
+    "ap-northeast-2": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
+    # Asia Pacific (Singapore) - ap-southeast-1
+    "ap-southeast-1": {
+        "claude-3-haiku-20240307": {"input": 0.00025, "output": 0.00125},
+        "claude-3-sonnet-20240229": {"input": 0.003, "output": 0.015},
+        "claude-3-opus-20240229": {"input": 0.015, "output": 0.075},
+        "claude-3-5-haiku-20241022": {"input": 0.0008, "output": 0.004},
+        "claude-3-5-sonnet-20240620": {"input": 0.003, "output": 0.015},
+        "claude-3-5-sonnet-20241022": {"input": 0.003, "output": 0.015},
+        "claude-3-7-sonnet-20250219": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-20250514": {"input": 0.003, "output": 0.015},
+        "claude-sonnet-4-5-20250929": {"input": 0.003, "output": 0.015},
+        "claude-opus-4-20250514": {"input": 0.015, "output": 0.075},
+        "claude-opus-4-1-20250808": {"input": 0.015, "output": 0.075},
+    },
 }
 
 # 리전 설정
@@ -76,27 +162,44 @@ REGIONS = {
 default_region = "us-east-1"
 
 
-def get_model_cost(model_id: str, input_tokens: int, output_tokens: int) -> float:
-    """모델별 비용 계산"""
+def get_model_cost(model_id: str, input_tokens: int, output_tokens: int, region: str = "default") -> float:
+    """모델별 비용 계산 (리전별 가격 반영)
+
+    Args:
+        model_id: Bedrock 모델 ID (예: us.anthropic.claude-3-haiku-20240307-v1:0)
+        input_tokens: 입력 토큰 수
+        output_tokens: 출력 토큰 수
+        region: AWS 리전 (예: us-east-1, ap-northeast-2)
+
+    Returns:
+        float: 계산된 비용 (USD)
+    """
     logger.debug(
-        f"Calculating cost for model: {model_id}, input: {input_tokens}, output: {output_tokens}"
+        f"Calculating cost for model: {model_id}, input: {input_tokens}, output: {output_tokens}, region: {region}"
     )
 
     # 모델 ID에서 모델명 추출 (예: us.anthropic.claude-3-haiku-20240307-v1:0 -> claude-3-haiku-20240307)
     model_name = model_id.split(".")[-1].split("-v")[0] if "." in model_id else model_id
 
-    # 가격 테이블에서 찾기
-    for key, pricing in MODEL_PRICING.items():
+    # 리전별 가격 테이블 선택 (해당 리전이 없으면 default 사용)
+    region_pricing = MODEL_PRICING.get(region, MODEL_PRICING["default"])
+
+    # 가격 테이블에서 모델 찾기
+    for key, pricing in region_pricing.items():
         if key in model_name:
-            cost = (input_tokens * pricing["input"]) + (
-                output_tokens * pricing["output"]
+            # 가격은 1000 토큰당 가격이므로 1000으로 나눔
+            cost = (input_tokens * pricing["input"] / 1000) + (
+                output_tokens * pricing["output"] / 1000
             )
-            logger.debug(f"Model: {key}, Cost: ${cost:.6f}")
+            logger.debug(f"Model: {key}, Region: {region}, Cost: ${cost:.6f}")
             return cost
 
     # 기본 가격 (Claude 3 Haiku)
-    logger.warning(f"Unknown model: {model_id}, using default pricing")
-    default_cost = (input_tokens * 0.00025 / 1000) + (output_tokens * 0.00125 / 1000)
+    logger.warning(f"Unknown model: {model_id}, using default pricing (Claude 3 Haiku)")
+    default_pricing = MODEL_PRICING["default"]["claude-3-haiku-20240307"]
+    default_cost = (input_tokens * default_pricing["input"] / 1000) + (
+        output_tokens * default_pricing["output"] / 1000
+    )
     return default_cost
 
 
@@ -653,10 +756,19 @@ class QCliAthenaTracker:
 
 
 def calculate_cost_for_dataframe(
-    df: pd.DataFrame, model_col: str = "model_name"
+    df: pd.DataFrame, model_col: str = "model_name", region: str = "default"
 ) -> pd.DataFrame:
-    """DataFrame에 비용 컬럼 추가"""
-    logger.info(f"Calculating cost for DataFrame with {len(df)} rows")
+    """DataFrame에 비용 컬럼 추가 (리전별 가격 반영)
+
+    Args:
+        df: 비용을 계산할 DataFrame
+        model_col: 모델명이 있는 컬럼명
+        region: AWS 리전 (예: us-east-1, ap-northeast-2)
+
+    Returns:
+        pd.DataFrame: 비용 컬럼이 추가된 DataFrame
+    """
+    logger.info(f"Calculating cost for DataFrame with {len(df)} rows, region: {region}")
 
     if df.empty:
         return df
@@ -674,11 +786,11 @@ def calculate_cost_for_dataframe(
             if row.get("total_output_tokens")
             else 0
         )
-        cost = get_model_cost(model, input_tokens, output_tokens)
+        cost = get_model_cost(model, input_tokens, output_tokens, region)
         costs.append(cost)
 
     df["estimated_cost_usd"] = costs
-    logger.info(f"Total cost calculated: ${sum(costs):.4f}")
+    logger.info(f"Total cost calculated for region {region}: ${sum(costs):.4f}")
     return df
 
 
@@ -816,7 +928,7 @@ def render_bedrock_analytics(selected_region, start_date, end_date):
             # 모델별 통계로 총 비용 계산
             model_df = tracker.get_model_usage_stats(start_date, end_date, arn_pattern if arn_pattern else None)
             if not model_df.empty:
-                model_df = calculate_cost_for_dataframe(model_df)
+                model_df = calculate_cost_for_dataframe(model_df, region=selected_region)
                 total_cost = model_df["estimated_cost_usd"].sum()
                 summary["total_cost_usd"] = total_cost
 
@@ -843,11 +955,15 @@ def render_bedrock_analytics(selected_region, start_date, end_date):
 
                 # 비용 계산을 위한 임시 모델명 추가 (모델별 평균 사용)
                 # 실제로는 각 사용자가 어떤 모델을 사용했는지 알아야 정확함
-                # 여기서는 Claude 3 Haiku 기본 가격 사용
-                user_df["estimated_cost_usd"] = (
-                    user_df["total_input_tokens"] * 0.00025 / 1000
-                    + user_df["total_output_tokens"] * 0.00125 / 1000
-                )
+                # 여기서는 Claude 3 Haiku 기본 가격 사용 (리전별 가격 반영)
+                costs = []
+                for _, row in user_df.iterrows():
+                    input_tokens = int(row.get("total_input_tokens", 0)) if row.get("total_input_tokens") else 0
+                    output_tokens = int(row.get("total_output_tokens", 0)) if row.get("total_output_tokens") else 0
+                    # Claude 3 Haiku를 기본 모델로 사용
+                    cost = get_model_cost("claude-3-haiku-20240307", input_tokens, output_tokens, selected_region)
+                    costs.append(cost)
+                user_df["estimated_cost_usd"] = costs
 
                 st.dataframe(user_df, use_container_width=True)
 
@@ -887,8 +1003,8 @@ def render_bedrock_analytics(selected_region, start_date, end_date):
                             user_app_df[col], errors="coerce"
                         ).fillna(0)
 
-                # 비용 계산
-                user_app_df = calculate_cost_for_dataframe(user_app_df)
+                # 비용 계산 (리전별 가격 반영)
+                user_app_df = calculate_cost_for_dataframe(user_app_df, region=selected_region)
 
                 st.dataframe(user_app_df, use_container_width=True)
             else:

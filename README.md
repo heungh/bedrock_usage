@@ -553,11 +553,11 @@ python bedrock_tracker_cli.py
 ```
 출력: 터미널에 전체 분석 결과 테이블 형식으로 표시
 
-2. **특정 리전 및 기간 분석**
+2. **특정 리전 및 기간 분석 (리전별 가격 자동 적용)**
 ```bash
 python bedrock_tracker_cli.py --region ap-northeast-2 --days 30
 ```
-출력: Seoul 리전의 최근 30일 데이터 분석
+출력: Seoul 리전의 최근 30일 데이터 분석 (Seoul 리전 가격 적용)
 
 3. **날짜 범위 직접 지정**
 ```bash
@@ -565,7 +565,19 @@ python bedrock_tracker_cli.py --start-date 2025-10-01 --end-date 2025-10-18
 ```
 출력: 지정된 기간의 데이터 분석
 
-4. **특정 분석만 실행**
+4. **ARN 패턴 필터링으로 특정 애플리케이션만 분석**
+```bash
+# DataAnalysis 애플리케이션만 분석
+python bedrock_tracker_cli.py --arn-pattern "DataAnalysis" --days 7
+
+# 특정 사용자만 분석
+python bedrock_tracker_cli.py --arn-pattern "user/john" --analysis user
+
+# 복합 필터: Tokyo 리전 + 특정 앱 + 최근 14일
+python bedrock_tracker_cli.py --region ap-northeast-1 --arn-pattern "ChatbotApp" --days 14
+```
+
+5. **특정 분석만 실행**
 ```bash
 # 요약만
 python bedrock_tracker_cli.py --analysis summary
@@ -586,25 +598,28 @@ python bedrock_tracker_cli.py --analysis daily
 python bedrock_tracker_cli.py --analysis hourly
 ```
 
-5. **CSV 파일로 저장**
+6. **CSV 파일로 저장**
 ```bash
 python bedrock_tracker_cli.py --format csv
 ```
 출력: `./report/` 디렉토리에 CSV 파일 저장
 
-6. **JSON 파일로 저장**
+7. **JSON 파일로 저장**
 ```bash
 python bedrock_tracker_cli.py --format json
 ```
 출력: `./report/` 디렉토리에 JSON 파일 저장
 
-7. **복합 옵션 사용**
+8. **복합 옵션 사용**
 ```bash
 # Tokyo 리전, 최근 14일, 사용자별 분석, CSV 저장
 python bedrock_tracker_cli.py --region ap-northeast-1 --days 14 --analysis user --format csv
 
 # 특정 기간, 모델별 분석, 최대 50개 행 표시
 python bedrock_tracker_cli.py --start-date 2025-10-01 --end-date 2025-10-18 --analysis model --max-rows 50
+
+# 특정 앱만 필터링 + 리전별 가격 적용 + JSON 저장
+python bedrock_tracker_cli.py --region us-east-1 --arn-pattern "CustomerService" --format json
 ```
 
 **출력 예시 (터미널)**:
@@ -639,6 +654,41 @@ user_or_app            call_count  total_input_tokens  total_output_tokens  esti
 CustomerServiceApp             5                 230                  510              0.0007
 DataAnalysisApp                4                 200                  450              0.0006
 user/heungsu                   3                 136                  250              0.0003
+================================================================================
+
+✅ 분석 완료!
+```
+
+**ARN 패턴 필터링 예시**:
+```bash
+# DataAnalysis 앱만 분석
+python bedrock_tracker_cli.py --arn-pattern "DataAnalysis" --days 7
+```
+```
+🚀 Bedrock Analytics CLI (Athena 기반)
+================================================================================
+📅 분석 기간: 2025-10-11 ~ 2025-10-18
+🌍 리전: us-east-1 (US East (N. Virginia))
+📋 분석 유형: all
+📄 출력 형식: terminal
+🔍 ARN 패턴 필터: 'DataAnalysis'
+
+📊 데이터 분석 중...
+
+================================================================================
+                            📊 전체 요약
+================================================================================
+  총 API 호출:                       4
+  총 Input 토큰:                   200
+  총 Output 토큰:                  450
+  총 비용 (USD):              $0.0006
+================================================================================
+
+================================================================================
+                    👥 사용자/애플리케이션별 분석
+================================================================================
+user_or_app            call_count  total_input_tokens  total_output_tokens  estimated_cost_usd
+DataAnalysisApp                4                 200                  450              0.0006
 ================================================================================
 
 ✅ 분석 완료!
@@ -1234,7 +1284,13 @@ def main():
 - 명령줄 인자를 통한 유연한 옵션 제어
 - 스크립트 및 자동화에 적합
 
-**주요 클래스**: `BedrockAthenaTracker` (bedrock_tracker.py와 동일)
+**주요 클래스**: `BedrockAthenaTracker`
+
+**주요 기능**:
+- ✅ **리전별 가격 적용**: 각 리전의 실제 가격표를 반영한 정확한 비용 계산
+- ✅ **ARN 패턴 필터링**: 특정 애플리케이션/사용자만 필터링하여 분석
+- ✅ **다양한 분석 유형**: summary, user, user-app, model, daily, hourly 분석 지원
+- ✅ **유연한 출력 형식**: 터미널 테이블, CSV, JSON 형식 지원
 
 #### 명령줄 인자 파싱
 ```python
@@ -1380,6 +1436,45 @@ python bedrock_tracker_cli.py \
 for region in us-east-1 ap-northeast-1 ap-northeast-2; do
   echo "Analyzing $region..."
   python bedrock_tracker_cli.py --region $region --format csv
+done
+```
+
+4. **애플리케이션별 비용 추적 자동화**
+```bash
+#!/bin/bash
+# app_cost_tracking.sh
+# 각 애플리케이션별 비용을 별도 파일로 저장
+
+apps=("CustomerService" "DataAnalysis" "Chatbot" "DocumentProcessor")
+
+for app in "${apps[@]}"; do
+  echo "Analyzing $app..."
+  python bedrock_tracker_cli.py \
+    --arn-pattern "$app" \
+    --days 30 \
+    --region us-east-1 \
+    --format json
+
+  # 파일명 변경
+  mv report/bedrock_analysis_*.json "report/${app}_monthly_cost.json"
+done
+
+echo "✅ All app cost reports generated!"
+```
+
+5. **리전별 가격 비교 스크립트**
+```bash
+#!/bin/bash
+# compare_regions.sh
+# 동일한 사용량에 대해 리전별 가격 비교
+
+for region in us-east-1 ap-northeast-2 eu-central-1; do
+  echo "=== $region ==="
+  python bedrock_tracker_cli.py \
+    --region $region \
+    --days 7 \
+    --analysis summary
+  echo ""
 done
 ```
 
@@ -1619,5 +1714,50 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ---
 
 **프로젝트 작성자**: AWS Solutions Architect
-**마지막 업데이트**: 2025-10-18
-**버전**: 1.0.0
+**마지막 업데이트**: 2025-10-19
+**버전**: 1.1.0
+
+---
+
+## 변경 이력
+
+### v1.1.0 (2025-10-19)
+
+**bedrock_tracker_cli.py 주요 개선사항**:
+
+1. **리전별 가격 테이블 추가**
+   - 모든 리전(us-east-1, us-west-2, eu-central-1, ap-northeast-1, ap-northeast-2, ap-southeast-1)별 가격 설정
+   - 리전에 따라 자동으로 올바른 가격 적용
+   - `get_model_cost()` 함수에 `region` 파라미터 추가
+   - `calculate_cost_for_dataframe()` 함수에 `region` 파라미터 추가
+
+2. **ARN 패턴 필터링 기능 강화**
+   - 모든 분석 메서드에 `arn_pattern` 파라미터 추가
+     - `get_total_summary()`
+     - `get_user_cost_analysis()`
+     - `get_user_app_detail_analysis()`
+     - `get_model_usage_stats()`
+     - `get_daily_usage_pattern()`
+     - `get_hourly_usage_pattern()`
+   - CLI에서 `--arn-pattern` 옵션으로 특정 애플리케이션/사용자 필터링 가능
+   - 각 쿼리에서 ARN 필터가 올바르게 적용되도록 SQL 쿼리 수정
+
+3. **비용 계산 정확도 향상**
+   - 사용자별 분석에서 리전별 가격 적용
+   - 모델별 분석에서 리전별 가격 적용
+   - 유저별 애플리케이션별 상세 분석에서 리전별 가격 적용
+
+4. **CLI 사용성 개선**
+   - 복합 필터링 지원 (리전 + ARN 패턴 동시 적용)
+   - 스크립트 자동화 예시 추가 (애플리케이션별 비용 추적, 리전별 가격 비교)
+
+**주요 기능 업그레이드**:
+- ✅ bedrock_tracker.py와 동일한 리전별 가격 구조 적용
+- ✅ 모든 분석 쿼리에 ARN 패턴 필터링 지원
+- ✅ 터미널에서 완전한 기능의 분석 도구로 개선
+- ✅ 자동화 스크립트 예시 확장
+
+### v1.0.0 (2025-10-18)
+- 초기 릴리스
+- Athena 기반 사용량 분석 시스템 구축
+- Streamlit 대시보드 및 CLI 도구 제공
