@@ -213,10 +213,12 @@ class BedrockAthenaTracker:
             return pd.DataFrame()
 
     def get_user_cost_analysis(
-        self, start_date: datetime, end_date: datetime
+        self, start_date: datetime, end_date: datetime, arn_pattern: str = None
     ) -> pd.DataFrame:
         """사용자별 비용 분석"""
-        logger.info(f"Getting user cost analysis from {start_date} to {end_date}")
+        logger.info(f"Getting user cost analysis from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -233,6 +235,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY identity.arn
         ORDER BY call_count DESC
         """
@@ -240,10 +243,12 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
     def get_user_app_detail_analysis(
-        self, start_date: datetime, end_date: datetime
+        self, start_date: datetime, end_date: datetime, arn_pattern: str = None
     ) -> pd.DataFrame:
         """유저별 애플리케이션별 상세 분석"""
-        logger.info(f"Getting user-app detail analysis from {start_date} to {end_date}")
+        logger.info(f"Getting user-app detail analysis from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -261,6 +266,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY identity.arn, modelId
         ORDER BY user_or_app, call_count DESC
         """
@@ -268,10 +274,12 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
     def get_hourly_usage_pattern(
-        self, start_date: datetime, end_date: datetime
+        self, start_date: datetime, end_date: datetime, arn_pattern: str = None
     ) -> pd.DataFrame:
         """시간별 사용 패턴 - timestamp에서 hour 추출"""
-        logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}")
+        logger.info(f"Getting hourly usage pattern from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -285,6 +293,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
         ORDER BY year, month, day, date_format(from_iso8601_timestamp(timestamp), '%H')
         """
@@ -292,10 +301,12 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
     def get_daily_usage_pattern(
-        self, start_date: datetime, end_date: datetime
+        self, start_date: datetime, end_date: datetime, arn_pattern: str = None
     ) -> pd.DataFrame:
         """일별 사용 패턴"""
-        logger.info(f"Getting daily usage pattern from {start_date} to {end_date}")
+        logger.info(f"Getting daily usage pattern from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -306,6 +317,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY year, month, day
         ORDER BY year, month, day
         """
@@ -313,10 +325,12 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
     def get_model_usage_stats(
-        self, start_date: datetime, end_date: datetime
+        self, start_date: datetime, end_date: datetime, arn_pattern: str = None
     ) -> pd.DataFrame:
         """모델별 사용 통계"""
-        logger.info(f"Getting model usage stats from {start_date} to {end_date}")
+        logger.info(f"Getting model usage stats from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -329,15 +343,18 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         GROUP BY modelId
         ORDER BY call_count DESC
         """
 
         return self.execute_athena_query(query)
 
-    def get_total_summary(self, start_date: datetime, end_date: datetime) -> Dict:
+    def get_total_summary(self, start_date: datetime, end_date: datetime, arn_pattern: str = None) -> Dict:
         """전체 요약 통계"""
-        logger.info(f"Getting total summary from {start_date} to {end_date}")
+        logger.info(f"Getting total summary from {start_date} to {end_date}, arn_pattern={arn_pattern}")
+
+        arn_filter = f"AND identity.arn LIKE '%{arn_pattern}%'" if arn_pattern else ""
 
         query = f"""
         SELECT
@@ -347,6 +364,7 @@ class BedrockAthenaTracker:
         FROM bedrock_invocation_logs
         WHERE CAST(CONCAT(year, '-', LPAD(month, 2, '0'), '-', LPAD(day, 2, '0')) AS DATE)
             BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}' AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {arn_filter}
         """
 
         df = self.execute_athena_query(query)
@@ -380,6 +398,260 @@ class BedrockAthenaTracker:
             }
 
 
+class QCliAthenaTracker:
+    """Amazon Q CLI 사용량 추적을 위한 Athena 쿼리 클래스"""
+
+    def __init__(self, region=default_region):
+        logger.info(f"Initializing QCliAthenaTracker with region: {region}")
+        self.region = region
+        self.athena = boto3.client("athena", region_name=region)
+        sts_client = boto3.client("sts", region_name=region)
+        self.account_id = sts_client.get_caller_identity()["Account"]
+        self.results_bucket = f"amazonq-developer-reports-{self.account_id}"
+        logger.info(
+            f"Account ID: {self.account_id}, Results bucket: {self.results_bucket}"
+        )
+
+    def execute_athena_query(
+        self, query: str, database: str = "qcli_analytics"
+    ) -> pd.DataFrame:
+        """Athena 쿼리 실행 및 결과 반환"""
+        logger.info(f"Executing Athena query on database: {database}")
+        logger.debug(f"Query: {query}")
+
+        try:
+            # 쿼리 실행
+            response = self.athena.start_query_execution(
+                QueryString=query,
+                QueryExecutionContext={"Database": database},
+                ResultConfiguration={
+                    "OutputLocation": f"s3://{self.results_bucket}/query-results/"
+                },
+            )
+
+            query_id = response["QueryExecutionId"]
+            logger.info(f"Query execution started: {query_id}")
+
+            # 쿼리 완료 대기
+            max_wait = 60
+            for i in range(max_wait):
+                result = self.athena.get_query_execution(QueryExecutionId=query_id)
+                status = result["QueryExecution"]["Status"]["State"]
+
+                if status == "SUCCEEDED":
+                    logger.info(f"Query succeeded in {i+1} seconds")
+                    break
+                elif status in ["FAILED", "CANCELLED"]:
+                    error = result["QueryExecution"]["Status"].get(
+                        "StateChangeReason", "Unknown error"
+                    )
+                    logger.error(f"Query failed: {error}")
+                    raise Exception(f"Query failed: {error}")
+
+                time.sleep(1)
+            else:
+                logger.error("Query timeout")
+                raise Exception("Query timeout")
+
+            # 결과 조회
+            result_response = self.athena.get_query_results(QueryExecutionId=query_id)
+
+            # DataFrame으로 변환
+            columns = [
+                col["Label"]
+                for col in result_response["ResultSet"]["ResultSetMetadata"][
+                    "ColumnInfo"
+                ]
+            ]
+            rows = []
+
+            for row in result_response["ResultSet"]["Rows"][1:]:  # 헤더 제외
+                row_data = [field.get("VarCharValue", "") for field in row["Data"]]
+                rows.append(row_data)
+
+            df = pd.DataFrame(rows, columns=columns)
+            logger.info(f"Query returned {len(df)} rows")
+            return df
+
+        except Exception as e:
+            logger.error(f"Athena query execution failed: {str(e)}")
+            st.error(f"Athena 쿼리 실행 실패: {str(e)}")
+            return pd.DataFrame()
+
+    def get_total_summary(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> Dict:
+        """전체 요약 통계 - Amazon Q Developer CSV 리포트 기반"""
+        logger.info(
+            f"Getting QCli total summary from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            SUM(CAST(request_count AS BIGINT)) as total_requests,
+            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
+            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
+            COUNT(DISTINCT user_id) as unique_users,
+            COUNT(DISTINCT date) as active_days
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        """
+
+        df = self.execute_athena_query(query)
+
+        if not df.empty and df.iloc[0]["total_requests"]:
+            result = {
+                "total_requests": (
+                    int(df.iloc[0]["total_requests"])
+                    if df.iloc[0]["total_requests"]
+                    else 0
+                ),
+                "total_agentic_requests": (
+                    int(df.iloc[0]["total_agentic_requests"])
+                    if df.iloc[0]["total_agentic_requests"]
+                    else 0
+                ),
+                "total_cli_requests": (
+                    int(df.iloc[0]["total_cli_requests"])
+                    if df.iloc[0]["total_cli_requests"]
+                    else 0
+                ),
+                "unique_users": (
+                    int(df.iloc[0]["unique_users"])
+                    if df.iloc[0]["unique_users"]
+                    else 0
+                ),
+                "active_days": (
+                    int(df.iloc[0]["active_days"]) if df.iloc[0]["active_days"] else 0
+                ),
+            }
+            logger.info(f"QCli total summary: {result}")
+            return result
+        else:
+            logger.warning("No data found for summary")
+            return {
+                "total_requests": 0,
+                "total_agentic_requests": 0,
+                "total_cli_requests": 0,
+                "unique_users": 0,
+                "active_days": 0,
+            }
+
+    def get_user_usage_analysis(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """사용자별 사용량 분석"""
+        logger.info(
+            f"Getting QCli user usage analysis from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            user_id,
+            SUM(CAST(request_count AS BIGINT)) as total_requests,
+            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
+            SUM(CAST(code_suggestion_count AS BIGINT)) as total_code_suggestions,
+            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
+            SUM(CAST(ide_request_count AS BIGINT)) as total_ide_requests,
+            COUNT(DISTINCT date) as active_days,
+            MIN(date) as first_activity,
+            MAX(date) as last_activity
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        GROUP BY user_id
+        ORDER BY total_requests DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_daily_usage_pattern(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """일별 사용 패턴"""
+        logger.info(
+            f"Getting QCli daily usage pattern from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            CAST(date AS VARCHAR) as date_str,
+            SUM(CAST(request_count AS BIGINT)) as total_requests,
+            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
+            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        GROUP BY date
+        ORDER BY date
+        """
+
+        return self.execute_athena_query(query)
+
+
+    def get_feature_usage_stats(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """기능별 사용 통계 (CLI vs IDE, Agentic vs Code Suggestion)"""
+        logger.info(
+            f"Getting QCli feature usage stats from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            'CLI Requests' as feature_type,
+            SUM(CAST(cli_request_count AS BIGINT)) as total_count,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        UNION ALL
+        SELECT
+            'IDE Requests' as feature_type,
+            SUM(CAST(ide_request_count AS BIGINT)) as total_count,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        UNION ALL
+        SELECT
+            'Agentic Requests' as feature_type,
+            SUM(CAST(agentic_request_count AS BIGINT)) as total_count,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        UNION ALL
+        SELECT
+            'Code Suggestions' as feature_type,
+            SUM(CAST(code_suggestion_count AS BIGINT)) as total_count,
+            COUNT(DISTINCT user_id) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
+            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+            {user_filter}
+        ORDER BY total_count DESC
+        """
+
+        return self.execute_athena_query(query)
+
+
 def calculate_cost_for_dataframe(
     df: pd.DataFrame, model_col: str = "model_name"
 ) -> pd.DataFrame:
@@ -411,26 +683,41 @@ def calculate_cost_for_dataframe(
 
 
 def main():
-    logger.info("Starting Bedrock Analytics Dashboard")
+    logger.info("Starting Analytics Dashboard")
 
     st.set_page_config(
-        page_title="Bedrock Analytics Dashboard", page_icon="📊", layout="wide"
+        page_title="AWS Analytics Dashboard", page_icon="📊", layout="wide"
     )
 
-    st.title("📊 AWS Bedrock Analytics Dashboard")
-    st.markdown("**Athena 기반 실시간 사용량 분석**")
+    st.title("📊 AWS Analytics Dashboard")
+    st.markdown("**Athena 기반 실시간 사용량 분석 - Bedrock & Amazon Q CLI**")
 
     # 사이드바 설정
     st.sidebar.header("⚙️ 분석 설정")
 
-    # 리전 선택
-    selected_region = st.sidebar.selectbox(
-        "리전 선택",
-        options=list(REGIONS.keys()),
-        format_func=lambda x: f"{x} - {REGIONS[x]}",
-        index=4,
+    # 분석 유형 선택
+    analysis_type = st.sidebar.radio(
+        "분석 유형 선택",
+        ["AWS Bedrock", "Amazon Q CLI"],
+        index=0
     )
-    logger.info(f"Selected region: {selected_region}")
+
+    # 리전 선택
+    if analysis_type == "Amazon Q CLI":
+        # Amazon Q CLI는 us-east-1에서만 사용자 활동 리포트 관리
+        st.sidebar.info("ℹ️ Amazon Q CLI 사용자 활동 리포트는 us-east-1에서만 관리됩니다.")
+        selected_region = "us-east-1"
+        st.sidebar.text(f"리전: {selected_region} - {REGIONS[selected_region]} (고정)")
+    else:
+        # Bedrock은 모든 리전 선택 가능
+        selected_region = st.sidebar.selectbox(
+            "리전 선택",
+            options=list(REGIONS.keys()),
+            format_func=lambda x: f"{x} - {REGIONS[x]}",
+            index=4,
+        )
+
+    logger.info(f"Selected region: {selected_region}, Analysis type: {analysis_type}")
 
     # 날짜 범위 선택
     st.sidebar.subheader("📅 날짜 범위 선택")
@@ -448,6 +735,27 @@ def main():
         )
 
     logger.info(f"Date range: {start_date} to {end_date}")
+
+    # 분석 유형에 따라 다른 대시보드 렌더링
+    if analysis_type == "AWS Bedrock":
+        render_bedrock_analytics(selected_region, start_date, end_date)
+    else:
+        render_qcli_analytics(selected_region, start_date, end_date)
+
+
+def render_bedrock_analytics(selected_region, start_date, end_date):
+    """Bedrock 분석 대시보드 렌더링"""
+    logger.info("Rendering Bedrock Analytics")
+
+    # ARN 패턴 필터
+    st.sidebar.subheader("🔍 ARN 패턴 필터 (선택사항)")
+    arn_pattern = st.sidebar.text_input(
+        "ARN 패턴",
+        value="",
+        placeholder="예: AmazonQ-CLI, q-cli",
+        key="bedrock_arn_pattern",
+        help="특정 ARN 패턴을 포함하는 사용자만 필터링합니다. 비워두면 전체 사용자를 표시합니다."
+    )
 
     # 현재 로깅 설정 자동 조회
     tracker = BedrockAthenaTracker(region=selected_region)
@@ -477,6 +785,7 @@ def main():
             f"⚠️ 설정 확인 중 오류: {current_config.get('error', 'Unknown error')}"
         )
         logger.error(f"Error checking logging config: {current_config.get('error')}")
+        return
 
     # 분석 실행
     if st.sidebar.button("🔍 데이터 분석", type="primary"):
@@ -484,8 +793,12 @@ def main():
 
         with st.spinner("Athena에서 데이터 분석 중..."):
 
+            # ARN 패턴 정보 표시
+            if arn_pattern:
+                st.info(f"🔍 ARN 패턴 필터링 적용: '{arn_pattern}'")
+
             # 전체 요약
-            summary = tracker.get_total_summary(start_date, end_date)
+            summary = tracker.get_total_summary(start_date, end_date, arn_pattern if arn_pattern else None)
 
             st.header("📊 전체 요약")
 
@@ -501,7 +814,7 @@ def main():
                 st.metric("총 Output 토큰", f"{summary['total_output_tokens']:,}")
 
             # 모델별 통계로 총 비용 계산
-            model_df = tracker.get_model_usage_stats(start_date, end_date)
+            model_df = tracker.get_model_usage_stats(start_date, end_date, arn_pattern if arn_pattern else None)
             if not model_df.empty:
                 model_df = calculate_cost_for_dataframe(model_df)
                 total_cost = model_df["estimated_cost_usd"].sum()
@@ -513,7 +826,7 @@ def main():
             # 사용자별 분석
             st.header("👥 사용자/애플리케이션별 분석")
 
-            user_df = tracker.get_user_cost_analysis(start_date, end_date)
+            user_df = tracker.get_user_cost_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not user_df.empty:
                 # 숫자 컬럼 변환
@@ -559,7 +872,7 @@ def main():
             # 유저별 애플리케이션별 상세 분석
             st.header("📱 유저별 애플리케이션별 상세 분석")
 
-            user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date)
+            user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not user_app_df.empty:
                 # 숫자 컬럼 변환
@@ -617,7 +930,7 @@ def main():
             # 일별 사용 패턴
             st.header("📅 일별 사용 패턴")
 
-            daily_df = tracker.get_daily_usage_pattern(start_date, end_date)
+            daily_df = tracker.get_daily_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not daily_df.empty and len(daily_df) > 0:
                 # 날짜 컬럼 생성
@@ -690,7 +1003,7 @@ def main():
             # 시간대별 패턴
             st.header("⏰ 시간대별 사용 패턴")
 
-            hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date)
+            hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not hourly_df.empty and len(hourly_df) > 0:
                 # 시간 컬럼 생성
@@ -839,7 +1152,287 @@ streamlit run bedrock_tracker.py
         for region_id, region_name in REGIONS.items():
             st.markdown(f"- **{region_id}**: {region_name}")
 
-    logger.info("Dashboard rendering complete")
+    logger.info("Bedrock Dashboard rendering complete")
+
+
+def render_qcli_analytics(selected_region, start_date, end_date):
+    """Amazon Q CLI 분석 대시보드 렌더링"""
+    logger.info("Rendering Amazon Q CLI Analytics")
+
+    # 사용자 패턴 필터
+    st.sidebar.subheader("🔍 사용자 ID 필터 (선택사항)")
+    user_pattern = st.sidebar.text_input(
+        "사용자 ID 패턴",
+        value="",
+        placeholder="예: user@example.com",
+        key="qcli_user_pattern",
+        help="특정 사용자 ID 패턴을 포함하는 사용자만 필터링합니다. 비워두면 전체 사용자를 표시합니다."
+    )
+
+    # QCli Tracker 초기화
+    tracker = QCliAthenaTracker(region=selected_region)
+
+    # 초기 정보 표시
+    st.info(
+        "📋 **Amazon Q CLI 사용량 분석**\n\n"
+        "이 대시보드는 Amazon Q Developer의 사용자 활동 리포트 CSV 파일을 기반으로 합니다.\n"
+        "CSV 리포트는 매일 자정(UTC)에 생성되며 S3 버킷에 저장됩니다."
+    )
+
+    # 분석 실행
+    if st.sidebar.button("🔍 데이터 분석", type="primary", key="qcli_analyze"):
+        logger.info("QCli Analysis button clicked")
+
+        with st.spinner("Athena에서 Amazon Q CLI 데이터 분석 중..."):
+
+            # 사용자 패턴 정보 표시
+            if user_pattern:
+                st.info(f"🔍 사용자 ID 패턴 필터링 적용: '{user_pattern}'")
+
+            # 전체 요약
+            summary = tracker.get_total_summary(
+                start_date, end_date, user_pattern if user_pattern else None
+            )
+
+            st.header("📊 전체 요약")
+
+            col1, col2, col3, col4, col5 = st.columns(5)
+
+            with col1:
+                st.metric("총 요청 수", f"{summary['total_requests']:,}")
+
+            with col2:
+                st.metric("Agentic 요청", f"{summary['total_agentic_requests']:,}")
+
+            with col3:
+                st.metric("CLI 요청", f"{summary['total_cli_requests']:,}")
+
+            with col4:
+                st.metric("활성 사용자", f"{summary['unique_users']:,}")
+
+            with col5:
+                st.metric("활동 일수", f"{summary['active_days']:,}")
+
+            # 사용자별 분석
+            st.header("👥 사용자별 분석")
+
+            user_df = tracker.get_user_usage_analysis(
+                start_date, end_date, user_pattern if user_pattern else None
+            )
+
+            if not user_df.empty:
+                # 숫자 컬럼 변환
+                numeric_columns = [
+                    "total_requests",
+                    "total_agentic_requests",
+                    "total_code_suggestions",
+                    "total_cli_requests",
+                    "total_ide_requests",
+                    "active_days",
+                ]
+                for col in numeric_columns:
+                    if col in user_df.columns:
+                        user_df[col] = pd.to_numeric(user_df[col], errors="coerce").fillna(0)
+
+                st.dataframe(user_df, use_container_width=True)
+
+                # 사용자별 요청 수 차트
+                if len(user_df) > 0:
+                    import plotly.express as px
+
+                    fig = px.bar(
+                        user_df.head(10),
+                        x="user_id",
+                        y="total_requests",
+                        title="상위 10명 사용자별 총 요청 수",
+                        labels={"user_id": "사용자 ID", "total_requests": "총 요청 수"},
+                    )
+                    fig.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Agentic vs Non-Agentic 요청 비교
+                    fig2 = px.bar(
+                        user_df.head(10),
+                        x="user_id",
+                        y=["total_agentic_requests", "total_code_suggestions"],
+                        title="상위 10명 사용자별 요청 유형 분포",
+                        labels={"value": "요청 수", "user_id": "사용자 ID"},
+                        barmode="group",
+                    )
+                    fig2.update_xaxes(tickangle=45)
+                    st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("분석할 사용자 데이터가 없습니다.")
+
+            # 기능별 사용 통계
+            st.header("📱 기능별 사용 통계")
+
+            feature_df = tracker.get_feature_usage_stats(
+                start_date, end_date, user_pattern if user_pattern else None
+            )
+
+            if not feature_df.empty:
+                # 숫자 컬럼 변환
+                for col in ["total_count", "unique_users"]:
+                    if col in feature_df.columns:
+                        feature_df[col] = pd.to_numeric(feature_df[col], errors="coerce").fillna(0)
+
+                st.dataframe(feature_df, use_container_width=True)
+
+                # 기능별 사용량 파이 차트
+                if len(feature_df) > 0:
+                    import plotly.express as px
+
+                    fig = px.pie(
+                        feature_df,
+                        values="total_count",
+                        names="feature_type",
+                        title="기능별 사용 비율",
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("분석할 기능 데이터가 없습니다.")
+
+            # 일별 사용 패턴
+            st.header("📅 일별 사용 패턴")
+
+            daily_df = tracker.get_daily_usage_pattern(
+                start_date, end_date, user_pattern if user_pattern else None
+            )
+
+            if not daily_df.empty and len(daily_df) > 0:
+                # 숫자 컬럼 변환
+                numeric_columns = [
+                    "total_requests",
+                    "total_agentic_requests",
+                    "total_cli_requests",
+                    "unique_users",
+                ]
+                for col in numeric_columns:
+                    if col in daily_df.columns:
+                        daily_df[col] = pd.to_numeric(daily_df[col], errors="coerce").fillna(0)
+
+                # 날짜를 datetime으로 변환
+                daily_df["date"] = pd.to_datetime(daily_df["date_str"])
+
+                # 표시용 DataFrame 생성
+                display_df = daily_df.copy()
+                display_df["날짜"] = display_df["date"].dt.strftime("%Y-%m-%d")
+                display_df = display_df[
+                    ["날짜", "total_requests", "total_agentic_requests", "total_cli_requests", "unique_users"]
+                ]
+                display_df.columns = ["날짜", "총 요청 수", "Agentic 요청", "CLI 요청", "활성 사용자"]
+
+                # 1. 테이블 먼저 표시
+                st.dataframe(display_df, use_container_width=True)
+
+                # 2. 그래프 표시
+                import plotly.express as px
+                import plotly.graph_objects as go
+
+                # 일별 요청 패턴
+                fig = px.line(
+                    daily_df,
+                    x="date",
+                    y="total_requests",
+                    title="일별 총 요청 수",
+                    labels={"date": "날짜", "total_requests": "총 요청 수"},
+                    markers=True,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # 일별 요청 유형별 분포
+                fig2 = go.Figure()
+                fig2.add_trace(
+                    go.Scatter(
+                        x=daily_df["date"],
+                        y=daily_df["total_agentic_requests"],
+                        mode="lines+markers",
+                        name="Agentic 요청",
+                        line=dict(color="blue"),
+                    )
+                )
+                fig2.add_trace(
+                    go.Scatter(
+                        x=daily_df["date"],
+                        y=daily_df["total_cli_requests"],
+                        mode="lines+markers",
+                        name="CLI 요청",
+                        line=dict(color="green"),
+                    )
+                )
+                fig2.update_layout(
+                    title="일별 요청 유형별 분포",
+                    xaxis_title="날짜",
+                    yaxis_title="요청 수",
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig2, use_container_width=True)
+
+                # 일별 활성 사용자 수
+                fig3 = px.bar(
+                    daily_df,
+                    x="date",
+                    y="unique_users",
+                    title="일별 활성 사용자 수",
+                    labels={"date": "날짜", "unique_users": "활성 사용자 수"},
+                )
+                st.plotly_chart(fig3, use_container_width=True)
+            else:
+                st.warning("선택한 기간에 일별 사용 데이터가 없습니다.")
+
+    else:
+        # 초기 화면
+        st.info(
+            "👈 왼쪽 사이드바에서 리전과 날짜 범위를 선택한 후 '데이터 분석' 버튼을 클릭하세요."
+        )
+
+        st.markdown("### 🛠️ 환경 설정 가이드")
+
+        st.markdown("#### 1️⃣ Amazon Q Developer 설정")
+        st.markdown(
+            """
+        1. **Amazon Q Developer 콘솔**에서 "Collect granular metrics per user" 옵션 활성화
+        2. **S3 버킷 지정**: 사용자 활동 리포트가 저장될 S3 버킷 설정
+        3. **매일 자정(UTC)**에 CSV 리포트가 자동으로 생성됩니다
+        """
+        )
+
+        st.markdown("#### 2️⃣ 분석 환경 구축")
+        st.code(
+            """
+# Amazon Q CLI 분석 환경 설정
+python setup_qcli_analytics.py --region us-east-1
+
+# 대시보드 실행
+streamlit run bedrock_tracker.py
+        """,
+            language="bash",
+        )
+
+        st.markdown("#### 3️⃣ 데이터 소스")
+        st.markdown(
+            """
+        **CSV 리포트 (사용자 활동)**:
+        - 일별 사용자별 요청 수
+        - Agentic 요청 수
+        - CLI/IDE 요청 수
+        - 코드 제안 수
+        """
+        )
+
+        st.markdown("### 📋 주요 메트릭")
+        st.markdown(
+            """
+        - **총 요청 수**: 전체 Amazon Q 요청 수
+        - **Agentic 요청**: Q&A 챗 또는 agentic 코딩 상호작용
+        - **CLI 요청**: Amazon Q CLI를 통한 요청
+        - **IDE 요청**: IDE 플러그인을 통한 요청
+        - **코드 제안**: 코드 자동 완성 제안 수
+        """
+        )
+
+    logger.info("QCli Dashboard rendering complete")
 
 
 if __name__ == "__main__":
