@@ -1567,11 +1567,9 @@ done
 [![Bedrock Usage Analytics Demo](http://img.youtube.com/vi/zWQ5dvICrAQ/0.jpg)](https://youtu.be/zWQ5dvICrAQ)
 
 **데모 영상에서 확인할 수 있는 내용**:
-- 초기 환경 설정 과정
-- 테스트 데이터 생성
 - Streamlit 대시보드 둘러보기
-- 실시간 비용 분석
-- 리전별/모델별 사용 패턴 확인
+- 유저/애플리케이션별 비용 분석
+- 리전별/모델별 사용패턴 확인
 
 ### 스크린샷
 
