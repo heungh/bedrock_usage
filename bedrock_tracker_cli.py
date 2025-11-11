@@ -455,6 +455,515 @@ class BedrockAthenaTracker:
         return self.execute_athena_query(query)
 
 
+# QCli 토큰 사용량 추정 상수
+# 기준: 영어 단어 1.4토큰, 4글자당 5토큰
+# 코드 1줄 평균 60-80문자 = 약 75-100토큰
+QCLI_TOKEN_ESTIMATION = {
+    "conservative": {  # 보수적 추정 (짧은 코드/간단한 질문)
+        "chat_message_input": 100,
+        "chat_message_output": 300,
+        "chat_code_line": 50,
+        "inline_suggestion": 40,
+        "inline_code_line": 50,
+        "dev_event_input": 400,
+        "dev_event_output": 600,
+        "test_event_input": 300,
+        "test_event_output": 500,
+        "doc_event_input": 200,
+        "doc_event_output": 400,
+    },
+    "average": {  # 평균 추정 (일반적인 사용) - 권장
+        "chat_message_input": 150,
+        "chat_message_output": 500,
+        "chat_code_line": 75,
+        "inline_suggestion": 60,
+        "inline_code_line": 75,
+        "dev_event_input": 600,
+        "dev_event_output": 1000,
+        "test_event_input": 450,
+        "test_event_output": 750,
+        "doc_event_input": 350,
+        "doc_event_output": 600,
+    },
+    "optimistic": {  # 낙관적 추정 (복잡한 코드/긴 대화)
+        "chat_message_input": 200,
+        "chat_message_output": 800,
+        "chat_code_line": 100,
+        "inline_suggestion": 80,
+        "inline_code_line": 100,
+        "dev_event_input": 1000,
+        "dev_event_output": 1500,
+        "test_event_input": 600,
+        "test_event_output": 1000,
+        "doc_event_input": 500,
+        "doc_event_output": 800,
+    }
+}
+
+
+class QCliAthenaTracker:
+    """Amazon Q CLI 사용량 추적을 위한 Athena 쿼리 클래스"""
+
+    def __init__(self, region='us-east-1'):
+        logger.info(f"Initializing QCliAthenaTracker with region: {region}")
+        self.region = region
+        self.athena = boto3.client("athena", region_name=region)
+        sts_client = boto3.client("sts", region_name=region)
+        self.account_id = sts_client.get_caller_identity()["Account"]
+        self.results_bucket = f"amazonq-developer-reports-{self.account_id}"
+        logger.info(
+            f"Account ID: {self.account_id}, Results bucket: {self.results_bucket}"
+        )
+
+    def execute_athena_query(
+        self, query: str, database: str = "qcli_analytics"
+    ) -> pd.DataFrame:
+        """Athena 쿼리 실행 및 결과 반환"""
+        logger.info(f"Executing Athena query on database: {database}")
+        logger.debug(f"Query: {query}")
+
+        try:
+            # 쿼리 실행
+            response = self.athena.start_query_execution(
+                QueryString=query,
+                QueryExecutionContext={"Database": database},
+                ResultConfiguration={
+                    "OutputLocation": f"s3://{self.results_bucket}/query-results/"
+                },
+            )
+
+            query_id = response["QueryExecutionId"]
+            logger.info(f"Query execution started: {query_id}")
+
+            # 쿼리 완료 대기
+            max_wait = 60
+            for i in range(max_wait):
+                result = self.athena.get_query_execution(QueryExecutionId=query_id)
+                status = result["QueryExecution"]["Status"]["State"]
+
+                if status == "SUCCEEDED":
+                    logger.info(f"Query succeeded in {i+1} seconds")
+                    break
+                elif status in ["FAILED", "CANCELLED"]:
+                    error = result["QueryExecution"]["Status"].get(
+                        "StateChangeReason", "Unknown error"
+                    )
+                    logger.error(f"Query failed: {error}")
+                    raise Exception(f"Query failed: {error}")
+
+                time.sleep(1)
+            else:
+                logger.error("Query timeout")
+                raise Exception("Query timeout")
+
+            # 결과 조회
+            result_response = self.athena.get_query_results(QueryExecutionId=query_id)
+
+            # DataFrame으로 변환
+            columns = [
+                col["Label"]
+                for col in result_response["ResultSet"]["ResultSetMetadata"][
+                    "ColumnInfo"
+                ]
+            ]
+            rows = []
+
+            for row in result_response["ResultSet"]["Rows"][1:]:  # 헤더 제외
+                row_data = [field.get("VarCharValue", "") for field in row["Data"]]
+                rows.append(row_data)
+
+            df = pd.DataFrame(rows, columns=columns)
+            logger.info(f"Query returned {len(df)} rows")
+            return df
+
+        except Exception as e:
+            logger.error(f"Athena query execution failed: {str(e)}")
+            print(f"❌ Athena 쿼리 실행 실패: {str(e)}", file=sys.stderr)
+            return pd.DataFrame()
+
+    def get_total_summary(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> Dict:
+        """전체 요약 통계 - Amazon Q Developer CSV 리포트 기반"""
+        logger.info(
+            f"Getting QCli total summary from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        # 실제 AWS CSV 메트릭 사용:
+        # - Chat_MessagesSent: 채팅 메시지 수
+        # - Inline_SuggestionsCount: 인라인 코드 제안 수
+        # - Chat_MessagesInteracted: 사용자 상호작용 메트릭
+        query = f"""
+        SELECT
+            COUNT(DISTINCT UserId) as unique_users,
+            COUNT(DISTINCT Date) as active_days,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_dev_events,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_test_events
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        """
+
+        df = self.execute_athena_query(query)
+
+        if not df.empty and df.iloc[0]["unique_users"]:
+            result = {
+                "unique_users": (
+                    int(df.iloc[0]["unique_users"])
+                    if df.iloc[0]["unique_users"]
+                    else 0
+                ),
+                "active_days": (
+                    int(df.iloc[0]["active_days"]) if df.iloc[0]["active_days"] else 0
+                ),
+                "total_chat_messages": (
+                    int(df.iloc[0]["total_chat_messages"])
+                    if df.iloc[0]["total_chat_messages"]
+                    else 0
+                ),
+                "total_inline_suggestions": (
+                    int(df.iloc[0]["total_inline_suggestions"])
+                    if df.iloc[0]["total_inline_suggestions"]
+                    else 0
+                ),
+                "total_inline_acceptances": (
+                    int(df.iloc[0]["total_inline_acceptances"])
+                    if df.iloc[0]["total_inline_acceptances"]
+                    else 0
+                ),
+                "total_chat_code_lines": (
+                    int(df.iloc[0]["total_chat_code_lines"])
+                    if df.iloc[0]["total_chat_code_lines"]
+                    else 0
+                ),
+                "total_inline_code_lines": (
+                    int(df.iloc[0]["total_inline_code_lines"])
+                    if df.iloc[0]["total_inline_code_lines"]
+                    else 0
+                ),
+                "total_dev_events": (
+                    int(df.iloc[0]["total_dev_events"])
+                    if df.iloc[0]["total_dev_events"]
+                    else 0
+                ),
+                "total_test_events": (
+                    int(df.iloc[0]["total_test_events"])
+                    if df.iloc[0]["total_test_events"]
+                    else 0
+                ),
+            }
+            logger.info(f"QCli total summary: {result}")
+            return result
+        else:
+            logger.warning("No data found for summary")
+            return {
+                "unique_users": 0,
+                "active_days": 0,
+                "total_chat_messages": 0,
+                "total_inline_suggestions": 0,
+                "total_inline_acceptances": 0,
+                "total_chat_code_lines": 0,
+                "total_inline_code_lines": 0,
+                "total_dev_events": 0,
+                "total_test_events": 0,
+            }
+
+    def get_user_usage_analysis(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """사용자별 사용량 분석"""
+        logger.info(
+            f"Getting QCli user usage analysis from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            UserId as user_id,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_dev_events,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_test_events,
+            SUM(CAST(DocGeneration_EventCount AS BIGINT)) as total_doc_events,
+            COUNT(DISTINCT Date) as active_days,
+            MIN(Date) as first_activity,
+            MAX(Date) as last_activity
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        GROUP BY UserId
+        ORDER BY total_chat_messages DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def get_daily_usage_pattern(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """일별 사용 패턴"""
+        logger.info(
+            f"Getting QCli daily usage pattern from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            Date as date_str,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        GROUP BY Date
+        ORDER BY Date
+        """
+
+        return self.execute_athena_query(query)
+
+
+    def get_feature_usage_stats(
+        self, start_date: datetime, end_date: datetime, user_pattern: str = None
+    ) -> pd.DataFrame:
+        """기능별 사용 통계 (Chat, Inline, Dev, Test, Doc 등)"""
+        logger.info(
+            f"Getting QCli feature usage stats from {start_date} to {end_date}, user_pattern={user_pattern}"
+        )
+
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
+
+        query = f"""
+        SELECT
+            'Chat Messages' as feature_type,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            'Inline Suggestions' as feature_type,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            'Inline Acceptances' as feature_type,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            '/dev Events' as feature_type,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            '/test Events' as feature_type,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            '/doc Events' as feature_type,
+            SUM(CAST(DocGeneration_EventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        ORDER BY total_count DESC
+        """
+
+        return self.execute_athena_query(query)
+
+    def estimate_tokens(self, summary: Dict, estimation_type: str = "average") -> Dict:
+        """사용량 데이터로부터 토큰 사용량 추정
+
+        Args:
+            summary: get_total_summary()에서 반환된 요약 데이터
+            estimation_type: "conservative", "average", "optimistic" 중 선택
+
+        Returns:
+            Dict: 추정된 토큰 사용량 정보
+        """
+        logger.info(f"Estimating tokens with {estimation_type} model")
+
+        if estimation_type not in QCLI_TOKEN_ESTIMATION:
+            logger.warning(f"Unknown estimation type: {estimation_type}, using 'average'")
+            estimation_type = "average"
+
+        constants = QCLI_TOKEN_ESTIMATION[estimation_type]
+
+        # Input 토큰 추정
+        estimated_input_tokens = (
+            summary.get("total_chat_messages", 0) * constants["chat_message_input"] +
+            summary.get("total_inline_suggestions", 0) * constants["inline_suggestion"] +
+            summary.get("total_dev_events", 0) * constants["dev_event_input"] +
+            summary.get("total_test_events", 0) * constants["test_event_input"] +
+            (summary.get("total_doc_events", 0) if "total_doc_events" in summary else 0) * constants["doc_event_input"]
+        )
+
+        # Output 토큰 추정
+        estimated_output_tokens = (
+            summary.get("total_chat_messages", 0) * constants["chat_message_output"] +
+            summary.get("total_chat_code_lines", 0) * constants["chat_code_line"] +
+            summary.get("total_inline_code_lines", 0) * constants["inline_code_line"] +
+            summary.get("total_inline_acceptances", 0) * constants["inline_suggestion"] +
+            summary.get("total_dev_events", 0) * constants["dev_event_output"] +
+            summary.get("total_test_events", 0) * constants["test_event_output"] +
+            (summary.get("total_doc_events", 0) if "total_doc_events" in summary else 0) * constants["doc_event_output"]
+        )
+
+        total_tokens = estimated_input_tokens + estimated_output_tokens
+
+        result = {
+            "estimation_type": estimation_type,
+            "estimated_input_tokens": int(estimated_input_tokens),
+            "estimated_output_tokens": int(estimated_output_tokens),
+            "estimated_total_tokens": int(total_tokens),
+        }
+
+        logger.info(f"Token estimation result: {result}")
+        return result
+
+    def check_official_limits(self, summary: Dict, days_in_period: int) -> Dict:
+        """공식 리밋 체크 및 경고 생성
+
+        Args:
+            summary: get_total_summary()에서 반환된 요약 데이터
+            days_in_period: 조회 기간의 일수
+
+        Returns:
+            Dict: 리밋 체크 결과 및 경고
+        """
+        logger.info("Checking official limits")
+
+        # 공식 문서화된 리밋
+        OFFICIAL_LIMITS = {
+            "dev_events": 30,  # /dev 명령어: 30회/월
+            "transformation_lines": 4000,  # Code Transformation: 4,000줄/월
+            # 채팅/인라인: AWS가 공개하지 않음
+        }
+
+        # 월간 사용량 추정 (현재 기간을 30일로 환산)
+        monthly_factor = 30 / days_in_period if days_in_period > 0 else 1
+
+        dev_events_used = summary.get("total_dev_events", 0)
+        dev_events_projected = int(dev_events_used * monthly_factor)
+
+        # Transformation 데이터는 summary에 없을 수 있음 (추후 추가 가능)
+        transformation_lines_used = summary.get("total_transformation_lines", 0)
+        transformation_lines_projected = int(transformation_lines_used * monthly_factor)
+
+        result = {
+            "dev_events": {
+                "used": dev_events_used,
+                "limit": OFFICIAL_LIMITS["dev_events"],
+                "projected_monthly": dev_events_projected,
+                "percentage": (dev_events_projected / OFFICIAL_LIMITS["dev_events"] * 100) if OFFICIAL_LIMITS["dev_events"] > 0 else 0,
+                "warning": dev_events_projected >= OFFICIAL_LIMITS["dev_events"] * 0.8
+            },
+            "transformation_lines": {
+                "used": transformation_lines_used,
+                "limit": OFFICIAL_LIMITS["transformation_lines"],
+                "projected_monthly": transformation_lines_projected,
+                "percentage": (transformation_lines_projected / OFFICIAL_LIMITS["transformation_lines"] * 100) if OFFICIAL_LIMITS["transformation_lines"] > 0 else 0,
+                "warning": transformation_lines_projected >= OFFICIAL_LIMITS["transformation_lines"] * 0.8
+            }
+        }
+
+        logger.info(f"Limit check result: {result}")
+        return result
+
+    def analyze_usage_trends(self, start_date: datetime, end_date: datetime, user_pattern: str = None) -> Dict:
+        """사용량 추세 분석 및 이상 감지
+
+        Args:
+            start_date: 시작 날짜
+            end_date: 종료 날짜
+            user_pattern: 사용자 필터 패턴
+
+        Returns:
+            Dict: 추세 분석 결과
+        """
+        logger.info(f"Analyzing usage trends from {start_date} to {end_date}")
+
+        # 일별 사용 패턴 조회
+        daily_df = self.get_daily_usage_pattern(start_date, end_date, user_pattern)
+
+        if daily_df.empty:
+            return {
+                "daily_avg": 0,
+                "daily_max": 0,
+                "daily_min": 0,
+                "anomaly_detected": False
+            }
+
+        # 숫자 변환
+        for col in ["total_chat_messages", "total_inline_suggestions"]:
+            if col in daily_df.columns:
+                daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').fillna(0)
+
+        # 일일 총 활동 계산
+        daily_df["total_activity"] = (
+            daily_df.get("total_chat_messages", 0) +
+            daily_df.get("total_inline_suggestions", 0)
+        )
+
+        daily_avg = daily_df["total_activity"].mean()
+        daily_max = daily_df["total_activity"].max()
+        daily_min = daily_df["total_activity"].min()
+
+        # 이상 감지: 일평균의 3배 초과하는 날이 있는지
+        anomaly_threshold = daily_avg * 3
+        anomaly_days = daily_df[daily_df["total_activity"] > anomaly_threshold]
+
+        result = {
+            "daily_avg": float(daily_avg),
+            "daily_max": float(daily_max),
+            "daily_min": float(daily_min),
+            "anomaly_detected": len(anomaly_days) > 0,
+            "anomaly_count": len(anomaly_days),
+            "anomaly_threshold": float(anomaly_threshold)
+        }
+
+        logger.info(f"Trend analysis result: {result}")
+        return result
+
+
 def calculate_cost_for_dataframe(df: pd.DataFrame, model_col: str = 'model_name', region: str = "default") -> pd.DataFrame:
     """DataFrame에 비용 컬럼 추가 (리전별 가격 반영)
 
@@ -541,8 +1050,126 @@ def save_to_json(data: dict, filename: str):
     print(f"✅ JSON 저장: {filepath}")
 
 
+def print_qcli_summary(summary: Dict, token_estimates: Dict, limit_check: Dict = None, trends: Dict = None):
+    """QCli 전체 요약 출력"""
+    print("\n" + "="*80)
+    print("📊 Amazon Q CLI 전체 요약".center(80))
+    print("="*80)
+    print(f"  활성 사용자:           {summary['unique_users']:>15,}")
+    print(f"  활동 일수:             {summary['active_days']:>15,}")
+    print(f"  채팅 메시지:           {summary['total_chat_messages']:>15,}")
+    print(f"  인라인 제안:           {summary['total_inline_suggestions']:>15,}")
+    print(f"  인라인 수락:           {summary['total_inline_acceptances']:>15,}")
+    print(f"  채팅 코드 라인:        {summary['total_chat_code_lines']:>15,}")
+    print(f"  인라인 코드 라인:      {summary['total_inline_code_lines']:>15,}")
+    print(f"  /dev 이벤트:           {summary['total_dev_events']:>15,}")
+    print(f"  /test 이벤트:          {summary['total_test_events']:>15,}")
+    print("="*80 + "\n")
+
+    # 토큰 추정치 출력 (평균만)
+    print("\n" + "="*80)
+    print("🔢 토큰 사용량 추정 (참고용)".center(80))
+    print("="*80)
+    print("💡 참고: Amazon Q Developer Pro는 $19/월 정액제입니다.")
+    print("   아래 토큰 추정치는 실제 청구 비용과 무관하며 ROI 분석 용도입니다.\n")
+
+    # 평균 추정치만 사용
+    token_avg = token_estimates.get("average", token_estimates[list(token_estimates.keys())[0]])
+
+    print(f"  Input 토큰:       {token_avg['estimated_input_tokens']:>15,}")
+    print(f"  Output 토큰:      {token_avg['estimated_output_tokens']:>15,}")
+    print(f"  총 토큰:          {token_avg['estimated_total_tokens']:>15,}")
+
+    # 가상 비용 계산 (Claude Sonnet 3.5 가격 기준)
+    MODEL_PRICING = {
+        "input": 0.003 / 1000,
+        "output": 0.015 / 1000,
+    }
+    virtual_cost = (
+        token_avg['estimated_input_tokens'] * MODEL_PRICING['input'] +
+        token_avg['estimated_output_tokens'] * MODEL_PRICING['output']
+    )
+    print(f"  가상 비용:        ${virtual_cost:>14.2f}")
+    print()
+
+    # ROI 비교
+    print("💰 ROI 분석:")
+    subscription_cost = 19.0
+    days_in_period = (summary.get('active_days', 30))
+    prorated_subscription = subscription_cost * (days_in_period / 30)
+
+    print(f"  구독료 (일할):    ${prorated_subscription:>14.2f}")
+    print(f"  가상 사용 비용:   ${virtual_cost:>14.2f}")
+
+    savings = virtual_cost - prorated_subscription
+    if savings > 0:
+        savings_pct = (savings / virtual_cost) * 100
+        print(f"  절감액:           ${savings:>14.2f} ({savings_pct:.1f}% 절감)")
+    else:
+        loss_pct = (-savings / prorated_subscription) * 100
+        print(f"  손실:             ${-savings:>14.2f} ({loss_pct:.1f}% 손실)")
+
+    print("="*80 + "\n")
+
+    # 리밋 체크 출력
+    if limit_check:
+        print("\n" + "="*80)
+        print("⚠️ 공식 리밋 모니터링".center(80))
+        print("="*80)
+
+        dev_limit = limit_check["dev_events"]
+        trans_limit = limit_check["transformation_lines"]
+
+        print("\n🔧 /dev 명령어:")
+        print(f"   현재 사용량:  {dev_limit['used']:>3} / {dev_limit['limit']:>3}회")
+        print(f"   월간 예상:    {dev_limit['projected_monthly']:>3}회 ({dev_limit['percentage']:.1f}%)")
+        if dev_limit['warning']:
+            print(f"   ⚠️  경고: 월간 리밋의 {dev_limit['percentage']:.1f}% 도달!")
+        elif dev_limit['percentage'] > 50:
+            print(f"   ⚠️  주의: 월간 리밋의 {dev_limit['percentage']:.1f}%")
+        else:
+            print(f"   ✅ 정상: 월간 리밋의 {dev_limit['percentage']:.1f}%")
+
+        print("\n🔄 Code Transformation:")
+        print(f"   현재 사용량:  {trans_limit['used']:>5,} / {trans_limit['limit']:>5,}줄")
+        print(f"   월간 예상:    {trans_limit['projected_monthly']:>5,}줄 ({trans_limit['percentage']:.1f}%)")
+        if trans_limit['warning']:
+            print(f"   ⚠️  경고: 월간 리밋의 {trans_limit['percentage']:.1f}% 도달!")
+        elif trans_limit['percentage'] > 50:
+            print(f"   ⚠️  주의: 월간 리밋의 {trans_limit['percentage']:.1f}%")
+        else:
+            print(f"   ✅ 정상: 월간 리밋의 {trans_limit['percentage']:.1f}%")
+
+        print("\n💡 참고:")
+        print("   - 채팅/인라인 제안: AWS가 공식 리밋을 공개하지 않음 (추적 불가)")
+        print("   - 실제 리밋 도달 시 AWS 콘솔에서 'Monthly limit reached' 메시지 표시")
+        print("="*80 + "\n")
+
+    # 추세 분석 출력
+    if trends:
+        print("\n" + "="*80)
+        print("📈 사용 패턴 분석".center(80))
+        print("="*80)
+        print(f"  일일 평균 활동:  {trends['daily_avg']:>10.1f}건")
+        print(f"  최대 활동일:     {trends['daily_max']:>10.0f}건")
+        print(f"  최소 활동일:     {trends['daily_min']:>10.0f}건")
+
+        if trends["anomaly_detected"]:
+            print(f"\n  🚨 사용량 급증 감지: {trends['anomaly_count']}일 동안 일평균({trends['daily_avg']:.1f})의")
+            print(f"     3배({trends['anomaly_threshold']:.1f})를 초과했습니다!")
+            print(f"     리밋 도달 가능성이 높습니다!")
+        else:
+            print(f"\n  ✅ 정상 패턴: 이상 활동 없음")
+
+        print("="*80 + "\n")
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Bedrock Usage Tracker CLI - Athena 기반')
+    parser = argparse.ArgumentParser(description='AWS Analytics CLI - Athena 기반 (Bedrock & Amazon Q CLI)')
+    parser.add_argument('--service',
+                       choices=['bedrock', 'qcli'],
+                       default='bedrock',
+                       help='분석할 서비스 (기본값: bedrock)')
     parser.add_argument('--days', type=int, default=7, help='분석할 일수 (기본값: 7일)')
     parser.add_argument('--region', default='us-east-1',
                        choices=list(REGIONS.keys()),
@@ -550,7 +1177,7 @@ def main():
     parser.add_argument('--start-date', help='시작 날짜 (YYYY-MM-DD)')
     parser.add_argument('--end-date', help='종료 날짜 (YYYY-MM-DD)')
     parser.add_argument('--analysis',
-                       choices=['all', 'summary', 'user', 'user-app', 'model', 'daily', 'hourly'],
+                       choices=['all', 'summary', 'user', 'user-app', 'model', 'daily', 'hourly', 'feature'],
                        default='all',
                        help='분석 유형 (기본값: all)')
     parser.add_argument('--format',
@@ -560,11 +1187,16 @@ def main():
     parser.add_argument('--max-rows', type=int, default=20,
                        help='테이블 최대 행 수 (기본값: 20)')
     parser.add_argument('--arn-pattern', type=str, default='',
-                       help='ARN 패턴 필터 (예: AmazonQ-CLI, q-cli)')
+                       help='ARN 패턴 필터 (Bedrock용, 예: AmazonQ-CLI, q-cli)')
+    parser.add_argument('--user-pattern', type=str, default='',
+                       help='사용자 ID 패턴 필터 (QCli용, 예: user@example.com)')
 
     args = parser.parse_args()
 
-    print("🚀 Bedrock Analytics CLI (Athena 기반)")
+    if args.service == 'bedrock':
+        print("🚀 Bedrock Analytics CLI (Athena 기반)")
+    else:
+        print("🚀 Amazon Q CLI Analytics (Athena 기반)")
     print("="*80)
 
     # 날짜 범위 설정
@@ -575,16 +1207,36 @@ def main():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=args.days)
 
-    arn_pattern = args.arn_pattern if args.arn_pattern else None
-
     print(f"📅 분석 기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}")
     print(f"🌍 리전: {args.region} ({REGIONS[args.region]})")
     print(f"📋 분석 유형: {args.analysis}")
     print(f"📄 출력 형식: {args.format}")
-    if arn_pattern:
-        print(f"🔍 ARN 패턴 필터: '{arn_pattern}'")
+
+    # 서비스별 필터 설정
+    if args.service == 'bedrock':
+        arn_pattern = args.arn_pattern if args.arn_pattern else None
+        if arn_pattern:
+            print(f"🔍 ARN 패턴 필터: '{arn_pattern}'")
+    else:
+        user_pattern = args.user_pattern if args.user_pattern else None
+        if user_pattern:
+            print(f"🔍 사용자 ID 패턴 필터: '{user_pattern}'")
     print()
 
+    # 서비스별 분기 처리
+    if args.service == 'bedrock':
+        # Bedrock 분석
+        analyze_bedrock(args, start_date, end_date, arn_pattern if args.arn_pattern else None)
+    else:
+        # QCli 분석
+        analyze_qcli(args, start_date, end_date, user_pattern if args.user_pattern else None)
+
+    print("\n✅ 분석 완료!")
+    logger.info("Analysis completed successfully")
+
+
+def analyze_bedrock(args, start_date: datetime, end_date: datetime, arn_pattern: str = None):
+    """Bedrock 분석 실행"""
     # Tracker 초기화
     tracker = BedrockAthenaTracker(region=args.region)
 
@@ -612,11 +1264,11 @@ def main():
     results = {}
 
     if args.analysis in ['all', 'summary']:
-        summary = tracker.get_total_summary(start_date, end_date, arn_pattern if arn_pattern else None)
+        summary = tracker.get_total_summary(start_date, end_date, arn_pattern)
         results['summary'] = summary
 
     if args.analysis in ['all', 'user']:
-        user_df = tracker.get_user_cost_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
+        user_df = tracker.get_user_cost_analysis(start_date, end_date, arn_pattern)
         if not user_df.empty:
             # 숫자 변환 및 비용 계산
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
@@ -634,7 +1286,7 @@ def main():
         results['user'] = user_df
 
     if args.analysis in ['all', 'user-app']:
-        user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date, arn_pattern if arn_pattern else None)
+        user_app_df = tracker.get_user_app_detail_analysis(start_date, end_date, arn_pattern)
         if not user_app_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in user_app_df.columns:
@@ -643,7 +1295,7 @@ def main():
         results['user_app'] = user_app_df
 
     if args.analysis in ['all', 'model']:
-        model_df = tracker.get_model_usage_stats(start_date, end_date, arn_pattern if arn_pattern else None)
+        model_df = tracker.get_model_usage_stats(start_date, end_date, arn_pattern)
         if not model_df.empty:
             for col in ['call_count', 'avg_input_tokens', 'avg_output_tokens',
                        'total_input_tokens', 'total_output_tokens']:
@@ -656,7 +1308,7 @@ def main():
         results['model'] = model_df
 
     if args.analysis in ['all', 'daily']:
-        daily_df = tracker.get_daily_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
+        daily_df = tracker.get_daily_usage_pattern(start_date, end_date, arn_pattern)
         if not daily_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in daily_df.columns:
@@ -664,7 +1316,7 @@ def main():
         results['daily'] = daily_df
 
     if args.analysis in ['all', 'hourly']:
-        hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
+        hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date, arn_pattern)
         if not hourly_df.empty:
             for col in ['call_count', 'total_input_tokens', 'total_output_tokens']:
                 if col in hourly_df.columns:
@@ -719,8 +1371,129 @@ def main():
         filename = f"bedrock_analysis_{args.region}_{timestamp}.json"
         save_to_json(json_data, filename)
 
-    print("\n✅ 분석 완료!")
-    logger.info("Analysis completed successfully")
+
+def analyze_qcli(args, start_date: datetime, end_date: datetime, user_pattern: str = None):
+    """QCli 분석 실행"""
+    # Tracker 초기화
+    tracker = QCliAthenaTracker(region=args.region)
+
+    print("📊 Amazon Q CLI 데이터 분석 중...\n")
+
+    # 데이터 수집
+    results = {}
+
+    if args.analysis in ['all', 'summary']:
+        summary = tracker.get_total_summary(start_date, end_date, user_pattern)
+        results['summary'] = summary
+
+        # 토큰 추정
+        token_conservative = tracker.estimate_tokens(summary, "conservative")
+        token_average = tracker.estimate_tokens(summary, "average")
+        token_optimistic = tracker.estimate_tokens(summary, "optimistic")
+
+        results['token_estimates'] = {
+            "conservative": token_conservative,
+            "average": token_average,
+            "optimistic": token_optimistic
+        }
+
+        # 리밋 체크 및 추세 분석 추가
+        days_in_period = (end_date - start_date).days + 1
+        results['limit_check'] = tracker.check_official_limits(summary, days_in_period)
+        results['trends'] = tracker.analyze_usage_trends(start_date, end_date, user_pattern)
+
+    if args.analysis in ['all', 'user']:
+        user_df = tracker.get_user_usage_analysis(start_date, end_date, user_pattern)
+        if not user_df.empty:
+            numeric_columns = [
+                "total_chat_messages",
+                "total_inline_suggestions",
+                "total_inline_acceptances",
+                "total_chat_code_lines",
+                "total_inline_code_lines",
+                "total_dev_events",
+                "total_test_events",
+                "total_doc_events",
+                "active_days",
+            ]
+            for col in numeric_columns:
+                if col in user_df.columns:
+                    user_df[col] = pd.to_numeric(user_df[col], errors='coerce').fillna(0)
+        results['user'] = user_df
+
+    if args.analysis in ['all', 'feature']:
+        feature_df = tracker.get_feature_usage_stats(start_date, end_date, user_pattern)
+        if not feature_df.empty:
+            for col in ["total_count", "unique_users"]:
+                if col in feature_df.columns:
+                    feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce').fillna(0)
+        results['feature'] = feature_df
+
+    if args.analysis in ['all', 'daily']:
+        daily_df = tracker.get_daily_usage_pattern(start_date, end_date, user_pattern)
+        if not daily_df.empty:
+            numeric_columns = [
+                "total_chat_messages",
+                "total_inline_suggestions",
+                "total_inline_acceptances",
+                "total_chat_code_lines",
+                "total_inline_code_lines",
+                "unique_users",
+            ]
+            for col in numeric_columns:
+                if col in daily_df.columns:
+                    daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').fillna(0)
+        results['daily'] = daily_df
+
+    # 출력 형식에 따라 결과 출력
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    if args.format == 'terminal':
+        # 터미널 출력
+        if 'summary' in results and 'token_estimates' in results:
+            print_qcli_summary(
+                results['summary'],
+                results['token_estimates'],
+                results.get('limit_check'),
+                results.get('trends')
+            )
+
+        if 'user' in results and not results['user'].empty:
+            print_dataframe_table(results['user'], "👥 사용자별 분석", args.max_rows)
+
+        if 'feature' in results and not results['feature'].empty:
+            print_dataframe_table(results['feature'], "📱 기능별 사용 통계", args.max_rows)
+
+        if 'daily' in results and not results['daily'].empty:
+            print_dataframe_table(results['daily'], "📅 일별 사용 패턴", args.max_rows)
+
+    elif args.format == 'csv':
+        # CSV 저장
+        for key, data in results.items():
+            if key in ['summary', 'token_estimates']:
+                continue
+            if isinstance(data, pd.DataFrame) and not data.empty:
+                filename = f"qcli_{key}_{args.region}_{timestamp}.csv"
+                save_to_csv(data, filename)
+
+    elif args.format == 'json':
+        # JSON 저장
+        json_data = {}
+
+        if 'summary' in results:
+            json_data['summary'] = results['summary']
+
+        if 'token_estimates' in results:
+            json_data['token_estimates'] = results['token_estimates']
+
+        for key, data in results.items():
+            if key in ['summary', 'token_estimates']:
+                continue
+            if isinstance(data, pd.DataFrame) and not data.empty:
+                json_data[key] = data.to_dict(orient='records')
+
+        filename = f"qcli_analysis_{args.region}_{timestamp}.json"
+        save_to_json(json_data, filename)
 
 
 if __name__ == "__main__":

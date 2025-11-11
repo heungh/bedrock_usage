@@ -501,6 +501,52 @@ class BedrockAthenaTracker:
             }
 
 
+# QCli 토큰 사용량 추정 상수
+# 기준: 영어 단어 1.4토큰, 4글자당 5토큰
+# 코드 1줄 평균 60-80문자 = 약 75-100토큰
+QCLI_TOKEN_ESTIMATION = {
+    "conservative": {  # 보수적 추정 (짧은 코드/간단한 질문)
+        "chat_message_input": 100,
+        "chat_message_output": 300,
+        "chat_code_line": 50,
+        "inline_suggestion": 40,
+        "inline_code_line": 50,
+        "dev_event_input": 400,
+        "dev_event_output": 600,
+        "test_event_input": 300,
+        "test_event_output": 500,
+        "doc_event_input": 200,
+        "doc_event_output": 400,
+    },
+    "average": {  # 평균 추정 (일반적인 사용) - 권장
+        "chat_message_input": 150,
+        "chat_message_output": 500,
+        "chat_code_line": 75,
+        "inline_suggestion": 60,
+        "inline_code_line": 75,
+        "dev_event_input": 600,
+        "dev_event_output": 1000,
+        "test_event_input": 450,
+        "test_event_output": 750,
+        "doc_event_input": 350,
+        "doc_event_output": 600,
+    },
+    "optimistic": {  # 낙관적 추정 (복잡한 코드/긴 대화)
+        "chat_message_input": 200,
+        "chat_message_output": 800,
+        "chat_code_line": 100,
+        "inline_suggestion": 80,
+        "inline_code_line": 100,
+        "dev_event_input": 1000,
+        "dev_event_output": 1500,
+        "test_event_input": 600,
+        "test_event_output": 1000,
+        "doc_event_input": 500,
+        "doc_event_output": 800,
+    }
+}
+
+
 class QCliAthenaTracker:
     """Amazon Q CLI 사용량 추적을 위한 Athena 쿼리 클래스"""
 
@@ -589,40 +635,33 @@ class QCliAthenaTracker:
             f"Getting QCli total summary from {start_date} to {end_date}, user_pattern={user_pattern}"
         )
 
-        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
 
+        # 실제 AWS CSV 메트릭 사용:
+        # - Chat_MessagesSent: 채팅 메시지 수
+        # - Inline_SuggestionsCount: 인라인 코드 제안 수
+        # - Chat_MessagesInteracted: 사용자 상호작용 메트릭
         query = f"""
         SELECT
-            SUM(CAST(request_count AS BIGINT)) as total_requests,
-            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
-            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
-            COUNT(DISTINCT user_id) as unique_users,
-            COUNT(DISTINCT date) as active_days
+            COUNT(DISTINCT UserId) as unique_users,
+            COUNT(DISTINCT Date) as active_days,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_dev_events,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_test_events
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
         """
 
         df = self.execute_athena_query(query)
 
-        if not df.empty and df.iloc[0]["total_requests"]:
+        if not df.empty and df.iloc[0]["unique_users"]:
             result = {
-                "total_requests": (
-                    int(df.iloc[0]["total_requests"])
-                    if df.iloc[0]["total_requests"]
-                    else 0
-                ),
-                "total_agentic_requests": (
-                    int(df.iloc[0]["total_agentic_requests"])
-                    if df.iloc[0]["total_agentic_requests"]
-                    else 0
-                ),
-                "total_cli_requests": (
-                    int(df.iloc[0]["total_cli_requests"])
-                    if df.iloc[0]["total_cli_requests"]
-                    else 0
-                ),
                 "unique_users": (
                     int(df.iloc[0]["unique_users"])
                     if df.iloc[0]["unique_users"]
@@ -631,17 +670,56 @@ class QCliAthenaTracker:
                 "active_days": (
                     int(df.iloc[0]["active_days"]) if df.iloc[0]["active_days"] else 0
                 ),
+                "total_chat_messages": (
+                    int(df.iloc[0]["total_chat_messages"])
+                    if df.iloc[0]["total_chat_messages"]
+                    else 0
+                ),
+                "total_inline_suggestions": (
+                    int(df.iloc[0]["total_inline_suggestions"])
+                    if df.iloc[0]["total_inline_suggestions"]
+                    else 0
+                ),
+                "total_inline_acceptances": (
+                    int(df.iloc[0]["total_inline_acceptances"])
+                    if df.iloc[0]["total_inline_acceptances"]
+                    else 0
+                ),
+                "total_chat_code_lines": (
+                    int(df.iloc[0]["total_chat_code_lines"])
+                    if df.iloc[0]["total_chat_code_lines"]
+                    else 0
+                ),
+                "total_inline_code_lines": (
+                    int(df.iloc[0]["total_inline_code_lines"])
+                    if df.iloc[0]["total_inline_code_lines"]
+                    else 0
+                ),
+                "total_dev_events": (
+                    int(df.iloc[0]["total_dev_events"])
+                    if df.iloc[0]["total_dev_events"]
+                    else 0
+                ),
+                "total_test_events": (
+                    int(df.iloc[0]["total_test_events"])
+                    if df.iloc[0]["total_test_events"]
+                    else 0
+                ),
             }
             logger.info(f"QCli total summary: {result}")
             return result
         else:
             logger.warning("No data found for summary")
             return {
-                "total_requests": 0,
-                "total_agentic_requests": 0,
-                "total_cli_requests": 0,
                 "unique_users": 0,
                 "active_days": 0,
+                "total_chat_messages": 0,
+                "total_inline_suggestions": 0,
+                "total_inline_acceptances": 0,
+                "total_chat_code_lines": 0,
+                "total_inline_code_lines": 0,
+                "total_dev_events": 0,
+                "total_test_events": 0,
             }
 
     def get_user_usage_analysis(
@@ -652,25 +730,28 @@ class QCliAthenaTracker:
             f"Getting QCli user usage analysis from {start_date} to {end_date}, user_pattern={user_pattern}"
         )
 
-        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
 
         query = f"""
         SELECT
-            user_id,
-            SUM(CAST(request_count AS BIGINT)) as total_requests,
-            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
-            SUM(CAST(code_suggestion_count AS BIGINT)) as total_code_suggestions,
-            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
-            SUM(CAST(ide_request_count AS BIGINT)) as total_ide_requests,
-            COUNT(DISTINCT date) as active_days,
-            MIN(date) as first_activity,
-            MAX(date) as last_activity
+            UserId as user_id,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_dev_events,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_test_events,
+            SUM(CAST(DocGeneration_EventCount AS BIGINT)) as total_doc_events,
+            COUNT(DISTINCT Date) as active_days,
+            MIN(Date) as first_activity,
+            MAX(Date) as last_activity
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
-        GROUP BY user_id
-        ORDER BY total_requests DESC
+        GROUP BY UserId
+        ORDER BY total_chat_messages DESC
         """
 
         return self.execute_athena_query(query)
@@ -683,21 +764,23 @@ class QCliAthenaTracker:
             f"Getting QCli daily usage pattern from {start_date} to {end_date}, user_pattern={user_pattern}"
         )
 
-        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
 
         query = f"""
         SELECT
-            CAST(date AS VARCHAR) as date_str,
-            SUM(CAST(request_count AS BIGINT)) as total_requests,
-            SUM(CAST(agentic_request_count AS BIGINT)) as total_agentic_requests,
-            SUM(CAST(cli_request_count AS BIGINT)) as total_cli_requests,
-            COUNT(DISTINCT user_id) as unique_users
+            Date as date_str,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_chat_messages,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_inline_suggestions,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_inline_acceptances,
+            SUM(CAST(Chat_AICodeLines AS BIGINT)) as total_chat_code_lines,
+            SUM(CAST(Inline_AICodeLines AS BIGINT)) as total_inline_code_lines,
+            COUNT(DISTINCT UserId) as unique_users
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
-        GROUP BY date
-        ORDER BY date
+        GROUP BY Date
+        ORDER BY Date
         """
 
         return self.execute_athena_query(query)
@@ -706,53 +789,225 @@ class QCliAthenaTracker:
     def get_feature_usage_stats(
         self, start_date: datetime, end_date: datetime, user_pattern: str = None
     ) -> pd.DataFrame:
-        """기능별 사용 통계 (CLI vs IDE, Agentic vs Code Suggestion)"""
+        """기능별 사용 통계 (Chat, Inline, Dev, Test, Doc 등)"""
         logger.info(
             f"Getting QCli feature usage stats from {start_date} to {end_date}, user_pattern={user_pattern}"
         )
 
-        user_filter = f"AND user_id LIKE '%{user_pattern}%'" if user_pattern else ""
+        user_filter = f"AND UserId LIKE '%{user_pattern}%'" if user_pattern else ""
 
         query = f"""
         SELECT
-            'CLI Requests' as feature_type,
-            SUM(CAST(cli_request_count AS BIGINT)) as total_count,
-            COUNT(DISTINCT user_id) as unique_users
+            'Chat Messages' as feature_type,
+            SUM(CAST(Chat_MessagesSent AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
         UNION ALL
         SELECT
-            'IDE Requests' as feature_type,
-            SUM(CAST(ide_request_count AS BIGINT)) as total_count,
-            COUNT(DISTINCT user_id) as unique_users
+            'Inline Suggestions' as feature_type,
+            SUM(CAST(Inline_SuggestionsCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
         UNION ALL
         SELECT
-            'Agentic Requests' as feature_type,
-            SUM(CAST(agentic_request_count AS BIGINT)) as total_count,
-            COUNT(DISTINCT user_id) as unique_users
+            'Inline Acceptances' as feature_type,
+            SUM(CAST(Inline_AcceptanceCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
         UNION ALL
         SELECT
-            'Code Suggestions' as feature_type,
-            SUM(CAST(code_suggestion_count AS BIGINT)) as total_count,
-            COUNT(DISTINCT user_id) as unique_users
+            '/dev Events' as feature_type,
+            SUM(CAST(Dev_GenerationEventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
         FROM qcli_user_activity_reports
-        WHERE date BETWEEN DATE '{start_date.strftime('%Y-%m-%d')}'
-            AND DATE '{end_date.strftime('%Y-%m-%d')}'
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            '/test Events' as feature_type,
+            SUM(CAST(TestGeneration_EventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            {user_filter}
+        UNION ALL
+        SELECT
+            '/doc Events' as feature_type,
+            SUM(CAST(DocGeneration_EventCount AS BIGINT)) as total_count,
+            COUNT(DISTINCT UserId) as unique_users
+        FROM qcli_user_activity_reports
+        WHERE parse_datetime(Date, 'MM-dd-yyyy') BETWEEN parse_datetime('{start_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
+            AND parse_datetime('{end_date.strftime('%m-%d-%Y')}', 'MM-dd-yyyy')
             {user_filter}
         ORDER BY total_count DESC
         """
 
         return self.execute_athena_query(query)
+
+    def estimate_tokens(self, summary: Dict, estimation_type: str = "average") -> Dict:
+        """사용량 데이터로부터 토큰 사용량 추정
+
+        Args:
+            summary: get_total_summary()에서 반환된 요약 데이터
+            estimation_type: "conservative", "average", "optimistic" 중 선택
+
+        Returns:
+            Dict: 추정된 토큰 사용량 정보
+        """
+        logger.info(f"Estimating tokens with {estimation_type} model")
+
+        if estimation_type not in QCLI_TOKEN_ESTIMATION:
+            logger.warning(f"Unknown estimation type: {estimation_type}, using 'average'")
+            estimation_type = "average"
+
+        constants = QCLI_TOKEN_ESTIMATION[estimation_type]
+
+        # Input 토큰 추정
+        estimated_input_tokens = (
+            summary.get("total_chat_messages", 0) * constants["chat_message_input"] +
+            summary.get("total_inline_suggestions", 0) * constants["inline_suggestion"] +
+            summary.get("total_dev_events", 0) * constants["dev_event_input"] +
+            summary.get("total_test_events", 0) * constants["test_event_input"] +
+            (summary.get("total_doc_events", 0) if "total_doc_events" in summary else 0) * constants["doc_event_input"]
+        )
+
+        # Output 토큰 추정
+        estimated_output_tokens = (
+            summary.get("total_chat_messages", 0) * constants["chat_message_output"] +
+            summary.get("total_chat_code_lines", 0) * constants["chat_code_line"] +
+            summary.get("total_inline_code_lines", 0) * constants["inline_code_line"] +
+            summary.get("total_inline_acceptances", 0) * constants["inline_suggestion"] +
+            summary.get("total_dev_events", 0) * constants["dev_event_output"] +
+            summary.get("total_test_events", 0) * constants["test_event_output"] +
+            (summary.get("total_doc_events", 0) if "total_doc_events" in summary else 0) * constants["doc_event_output"]
+        )
+
+        total_tokens = estimated_input_tokens + estimated_output_tokens
+
+        result = {
+            "estimation_type": estimation_type,
+            "estimated_input_tokens": int(estimated_input_tokens),
+            "estimated_output_tokens": int(estimated_output_tokens),
+            "estimated_total_tokens": int(total_tokens),
+        }
+
+        logger.info(f"Token estimation result: {result}")
+        return result
+
+    def check_official_limits(self, summary: Dict, days_in_period: int) -> Dict:
+        """공식 리밋 체크 및 경고 생성
+
+        Args:
+            summary: get_total_summary()에서 반환된 요약 데이터
+            days_in_period: 조회 기간의 일수
+
+        Returns:
+            Dict: 리밋 체크 결과 및 경고
+        """
+        logger.info("Checking official limits")
+
+        # 공식 문서화된 리밋
+        OFFICIAL_LIMITS = {
+            "dev_events": 30,  # /dev 명령어: 30회/월
+            "transformation_lines": 4000,  # Code Transformation: 4,000줄/월
+            # 채팅/인라인: AWS가 공개하지 않음
+        }
+
+        # 월간 사용량 추정 (현재 기간을 30일로 환산)
+        monthly_factor = 30 / days_in_period if days_in_period > 0 else 1
+
+        dev_events_used = summary.get("total_dev_events", 0)
+        dev_events_projected = int(dev_events_used * monthly_factor)
+
+        # Transformation 데이터는 summary에 없을 수 있음 (추후 추가 가능)
+        transformation_lines_used = summary.get("total_transformation_lines", 0)
+        transformation_lines_projected = int(transformation_lines_used * monthly_factor)
+
+        result = {
+            "dev_events": {
+                "used": dev_events_used,
+                "limit": OFFICIAL_LIMITS["dev_events"],
+                "projected_monthly": dev_events_projected,
+                "percentage": (dev_events_projected / OFFICIAL_LIMITS["dev_events"] * 100) if OFFICIAL_LIMITS["dev_events"] > 0 else 0,
+                "warning": dev_events_projected >= OFFICIAL_LIMITS["dev_events"] * 0.8
+            },
+            "transformation_lines": {
+                "used": transformation_lines_used,
+                "limit": OFFICIAL_LIMITS["transformation_lines"],
+                "projected_monthly": transformation_lines_projected,
+                "percentage": (transformation_lines_projected / OFFICIAL_LIMITS["transformation_lines"] * 100) if OFFICIAL_LIMITS["transformation_lines"] > 0 else 0,
+                "warning": transformation_lines_projected >= OFFICIAL_LIMITS["transformation_lines"] * 0.8
+            }
+        }
+
+        logger.info(f"Limit check result: {result}")
+        return result
+
+    def analyze_usage_trends(self, start_date: datetime, end_date: datetime, user_pattern: str = None) -> Dict:
+        """사용량 추세 분석 및 이상 감지
+
+        Args:
+            start_date: 시작 날짜
+            end_date: 종료 날짜
+            user_pattern: 사용자 필터 패턴
+
+        Returns:
+            Dict: 추세 분석 결과
+        """
+        logger.info(f"Analyzing usage trends from {start_date} to {end_date}")
+
+        # 일별 사용 패턴 조회
+        daily_df = self.get_daily_usage_pattern(start_date, end_date, user_pattern)
+
+        if daily_df.empty:
+            return {
+                "daily_avg": 0,
+                "daily_max": 0,
+                "daily_min": 0,
+                "anomaly_detected": False
+            }
+
+        # 숫자 변환
+        for col in ["total_chat_messages", "total_inline_suggestions"]:
+            if col in daily_df.columns:
+                daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').fillna(0)
+
+        # 일일 총 활동 계산
+        daily_df["total_activity"] = (
+            daily_df.get("total_chat_messages", 0) +
+            daily_df.get("total_inline_suggestions", 0)
+        )
+
+        daily_avg = daily_df["total_activity"].mean()
+        daily_max = daily_df["total_activity"].max()
+        daily_min = daily_df["total_activity"].min()
+
+        # 이상 감지: 일평균의 3배 초과하는 날이 있는지
+        anomaly_threshold = daily_avg * 3
+        anomaly_days = daily_df[daily_df["total_activity"] > anomaly_threshold]
+
+        result = {
+            "daily_avg": float(daily_avg),
+            "daily_max": float(daily_max),
+            "daily_min": float(daily_min),
+            "anomaly_detected": len(anomaly_days) > 0,
+            "anomaly_count": len(anomaly_days),
+            "anomaly_threshold": float(anomaly_threshold)
+        }
+
+        logger.info(f"Trend analysis result: {result}")
+        return result
 
 
 def calculate_cost_for_dataframe(
@@ -1049,13 +1304,13 @@ def render_bedrock_analytics(selected_region, start_date, end_date):
             daily_df = tracker.get_daily_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not daily_df.empty and len(daily_df) > 0:
-                # 날짜 컬럼 생성
+                # 날짜 컬럼 생성 (숫자를 문자열로 변환 후 zfill 적용)
                 daily_df["date"] = pd.to_datetime(
-                    daily_df["year"]
+                    daily_df["year"].astype(str)
                     + "-"
-                    + daily_df["month"].str.zfill(2)
+                    + daily_df["month"].astype(str).str.zfill(2)
                     + "-"
-                    + daily_df["day"].str.zfill(2)
+                    + daily_df["day"].astype(str).str.zfill(2)
                 )
 
                 # 숫자 컬럼 변환
@@ -1122,15 +1377,15 @@ def render_bedrock_analytics(selected_region, start_date, end_date):
             hourly_df = tracker.get_hourly_usage_pattern(start_date, end_date, arn_pattern if arn_pattern else None)
 
             if not hourly_df.empty and len(hourly_df) > 0:
-                # 시간 컬럼 생성
+                # 시간 컬럼 생성 (숫자를 문자열로 변환 후 zfill 적용)
                 hourly_df["datetime"] = pd.to_datetime(
-                    hourly_df["year"]
+                    hourly_df["year"].astype(str)
                     + "-"
-                    + hourly_df["month"].str.zfill(2)
+                    + hourly_df["month"].astype(str).str.zfill(2)
                     + "-"
-                    + hourly_df["day"].str.zfill(2)
+                    + hourly_df["day"].astype(str).str.zfill(2)
                     + " "
-                    + hourly_df["hour"].str.zfill(2)
+                    + hourly_df["hour"].astype(str).str.zfill(2)
                     + ":00:00"
                 )
 
@@ -1312,22 +1567,185 @@ def render_qcli_analytics(selected_region, start_date, end_date):
 
             st.header("📊 전체 요약")
 
-            col1, col2, col3, col4, col5 = st.columns(5)
+            col1, col2, col3, col4 = st.columns(4)
 
             with col1:
-                st.metric("총 요청 수", f"{summary['total_requests']:,}")
+                st.metric("채팅 메시지", f"{summary['total_chat_messages']:,}")
 
             with col2:
-                st.metric("Agentic 요청", f"{summary['total_agentic_requests']:,}")
+                st.metric("인라인 제안", f"{summary['total_inline_suggestions']:,}")
 
             with col3:
-                st.metric("CLI 요청", f"{summary['total_cli_requests']:,}")
-
-            with col4:
                 st.metric("활성 사용자", f"{summary['unique_users']:,}")
 
-            with col5:
+            with col4:
                 st.metric("활동 일수", f"{summary['active_days']:,}")
+
+            col5, col6, col7, col8 = st.columns(4)
+
+            with col5:
+                st.metric("채팅 코드 라인", f"{summary['total_chat_code_lines']:,}")
+
+            with col6:
+                st.metric("인라인 코드 라인", f"{summary['total_inline_code_lines']:,}")
+
+            with col7:
+                st.metric("/dev 이벤트", f"{summary['total_dev_events']:,}")
+
+            with col8:
+                st.metric("/test 이벤트", f"{summary['total_test_events']:,}")
+
+            # 리밋 추적 섹션 (새로 추가)
+            st.header("⚠️ 공식 리밋 모니터링")
+
+            # 조회 기간 일수 계산
+            days_in_period = (end_date - start_date).days + 1
+
+            # 리밋 체크
+            limit_check = tracker.check_official_limits(summary, days_in_period)
+
+            # 추세 분석
+            trends = tracker.analyze_usage_trends(start_date, end_date, user_pattern if user_pattern else None)
+
+            # 리밋 상태 표시
+            col_limit1, col_limit2 = st.columns(2)
+
+            with col_limit1:
+                st.subheader("🔧 /dev 명령어")
+                dev_limit = limit_check["dev_events"]
+
+                # 경고 색상
+                if dev_limit["warning"]:
+                    st.error(f"⚠️ 경고: 월간 리밋의 {dev_limit['percentage']:.1f}% 도달!")
+                elif dev_limit["percentage"] > 50:
+                    st.warning(f"주의: 월간 리밋의 {dev_limit['percentage']:.1f}%")
+                else:
+                    st.success(f"정상: 월간 리밋의 {dev_limit['percentage']:.1f}%")
+
+                st.metric(
+                    "현재 사용량 / 월간 리밋",
+                    f"{dev_limit['used']} / {dev_limit['limit']}회"
+                )
+                st.metric(
+                    "월간 예상 사용량",
+                    f"{dev_limit['projected_monthly']}회",
+                    delta=f"{dev_limit['projected_monthly'] - dev_limit['limit']}회 여유" if dev_limit['projected_monthly'] < dev_limit['limit'] else f"{dev_limit['projected_monthly'] - dev_limit['limit']}회 초과 예상"
+                )
+
+            with col_limit2:
+                st.subheader("🔄 Code Transformation")
+                trans_limit = limit_check["transformation_lines"]
+
+                # 경고 색상
+                if trans_limit["warning"]:
+                    st.error(f"⚠️ 경고: 월간 리밋의 {trans_limit['percentage']:.1f}% 도달!")
+                elif trans_limit["percentage"] > 50:
+                    st.warning(f"주의: 월간 리밋의 {trans_limit['percentage']:.1f}%")
+                else:
+                    st.success(f"정상: 월간 리밋의 {trans_limit['percentage']:.1f}%")
+
+                st.metric(
+                    "현재 사용량 / 월간 리밋",
+                    f"{trans_limit['used']:,} / {trans_limit['limit']:,}줄"
+                )
+                st.metric(
+                    "월간 예상 사용량",
+                    f"{trans_limit['projected_monthly']:,}줄",
+                    delta=f"{trans_limit['projected_monthly'] - trans_limit['limit']:,}줄 여유" if trans_limit['projected_monthly'] < trans_limit['limit'] else f"{trans_limit['projected_monthly'] - trans_limit['limit']:,}줄 초과 예상"
+                )
+
+            # 사용 패턴 분석
+            st.subheader("📈 사용 패턴 분석")
+
+            col_trend1, col_trend2, col_trend3 = st.columns(3)
+
+            with col_trend1:
+                st.metric("일일 평균 활동", f"{trends['daily_avg']:.1f}건")
+
+            with col_trend2:
+                st.metric("최대 활동일", f"{trends['daily_max']:.0f}건")
+
+            with col_trend3:
+                if trends["anomaly_detected"]:
+                    st.error(f"⚠️ 이상 감지: {trends['anomaly_count']}일")
+                else:
+                    st.success("✅ 정상 패턴")
+
+            if trends["anomaly_detected"]:
+                st.warning(
+                    f"🚨 **사용량 급증 감지**: {trends['anomaly_count']}일 동안 일평균({trends['daily_avg']:.1f})의 "
+                    f"3배({trends['anomaly_threshold']:.1f})를 초과했습니다. "
+                    f"리밋 도달 가능성이 높습니다!"
+                )
+
+            # 주요 안내 사항
+            st.info(
+                "💡 **리밋 정보**\n\n"
+                "- **채팅/인라인 제안**: AWS가 공식 리밋을 공개하지 않음 (추적 불가)\n"
+                "- **/dev 명령어**: 30회/월 (공식 문서)\n"
+                "- **Code Transformation**: 4,000줄/월 (공식 문서)\n\n"
+                "📊 **이 대시보드는 CSV 데이터 기반으로 간접 추정**만 가능합니다.\n"
+                "실제 리밋 도달 시 AWS 콘솔에서 'Monthly limit reached' 메시지를 받게 됩니다."
+            )
+
+            # 토큰 사용량 추정 (참고용으로 변경)
+            st.header("🔢 토큰 사용량 추정 (참고용)")
+            st.info(
+                "💡 **참고**: Amazon Q Developer Pro는 **$19/월 정액제**입니다.\n\n"
+                "아래 토큰 추정치는 실제 청구 비용과 무관하며, 다음 용도로만 사용됩니다:\n"
+                "- ROI 분석: 구독료 대비 얼마나 많이 사용하는가?\n"
+                "- 가상 비교: Claude API를 직접 사용했다면 얼마가 나왔을까?\n"
+                "- 사용량 파악: 대략적인 토큰 사용 규모 이해"
+            )
+
+            # 평균 추정치만 계산
+            token_estimate = tracker.estimate_tokens(summary, "average")
+
+            # 가상 비용 계산 (Claude Sonnet 3.5 가격 기준)
+            MODEL_PRICING = {
+                "input": 0.003 / 1000,  # $0.003 per 1K tokens
+                "output": 0.015 / 1000,  # $0.015 per 1K tokens
+            }
+            virtual_cost = (
+                token_estimate['estimated_input_tokens'] * MODEL_PRICING['input'] +
+                token_estimate['estimated_output_tokens'] * MODEL_PRICING['output']
+            )
+
+            # 추정치 표시
+            col_est1, col_est2, col_est3, col_est4 = st.columns(4)
+
+            with col_est1:
+                st.metric("Input 토큰", f"{token_estimate['estimated_input_tokens']:,}")
+
+            with col_est2:
+                st.metric("Output 토큰", f"{token_estimate['estimated_output_tokens']:,}")
+
+            with col_est3:
+                st.metric("총 토큰", f"{token_estimate['estimated_total_tokens']:,}")
+
+            with col_est4:
+                st.metric("가상 비용 (Claude API)", f"${virtual_cost:.2f}")
+
+            # ROI 비교
+            st.subheader("💰 ROI 분석")
+            subscription_cost = 19.0  # $19/월
+            days_in_period = (end_date - start_date).days + 1
+            prorated_subscription = subscription_cost * (days_in_period / 30)
+
+            col_roi1, col_roi2, col_roi3 = st.columns(3)
+
+            with col_roi1:
+                st.metric("구독료 (기간 일할)", f"${prorated_subscription:.2f}")
+
+            with col_roi2:
+                st.metric("가상 사용 비용", f"${virtual_cost:.2f}")
+
+            with col_roi3:
+                savings = virtual_cost - prorated_subscription
+                if savings > 0:
+                    st.metric("절감액", f"${savings:.2f}", delta=f"{(savings/virtual_cost)*100:.1f}% 절감")
+                else:
+                    st.metric("손실", f"${-savings:.2f}", delta=f"{(-savings/prorated_subscription)*100:.1f}% 손실", delta_color="inverse")
 
             # 사용자별 분석
             st.header("👥 사용자별 분석")
@@ -1339,11 +1757,14 @@ def render_qcli_analytics(selected_region, start_date, end_date):
             if not user_df.empty:
                 # 숫자 컬럼 변환
                 numeric_columns = [
-                    "total_requests",
-                    "total_agentic_requests",
-                    "total_code_suggestions",
-                    "total_cli_requests",
-                    "total_ide_requests",
+                    "total_chat_messages",
+                    "total_inline_suggestions",
+                    "total_inline_acceptances",
+                    "total_chat_code_lines",
+                    "total_inline_code_lines",
+                    "total_dev_events",
+                    "total_test_events",
+                    "total_doc_events",
                     "active_days",
                 ]
                 for col in numeric_columns:
@@ -1352,27 +1773,27 @@ def render_qcli_analytics(selected_region, start_date, end_date):
 
                 st.dataframe(user_df, use_container_width=True)
 
-                # 사용자별 요청 수 차트
+                # 사용자별 활동 차트
                 if len(user_df) > 0:
                     import plotly.express as px
 
                     fig = px.bar(
                         user_df.head(10),
                         x="user_id",
-                        y="total_requests",
-                        title="상위 10명 사용자별 총 요청 수",
-                        labels={"user_id": "사용자 ID", "total_requests": "총 요청 수"},
+                        y="total_chat_messages",
+                        title="상위 10명 사용자별 채팅 메시지 수",
+                        labels={"user_id": "사용자 ID", "total_chat_messages": "채팅 메시지 수"},
                     )
                     fig.update_xaxes(tickangle=45)
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Agentic vs Non-Agentic 요청 비교
+                    # Chat vs Inline 코드 라인 비교
                     fig2 = px.bar(
                         user_df.head(10),
                         x="user_id",
-                        y=["total_agentic_requests", "total_code_suggestions"],
-                        title="상위 10명 사용자별 요청 유형 분포",
-                        labels={"value": "요청 수", "user_id": "사용자 ID"},
+                        y=["total_chat_code_lines", "total_inline_code_lines"],
+                        title="상위 10명 사용자별 코드 라인 생성 (Chat vs Inline)",
+                        labels={"value": "코드 라인 수", "user_id": "사용자 ID"},
                         barmode="group",
                     )
                     fig2.update_xaxes(tickangle=45)
@@ -1419,25 +1840,27 @@ def render_qcli_analytics(selected_region, start_date, end_date):
             if not daily_df.empty and len(daily_df) > 0:
                 # 숫자 컬럼 변환
                 numeric_columns = [
-                    "total_requests",
-                    "total_agentic_requests",
-                    "total_cli_requests",
+                    "total_chat_messages",
+                    "total_inline_suggestions",
+                    "total_inline_acceptances",
+                    "total_chat_code_lines",
+                    "total_inline_code_lines",
                     "unique_users",
                 ]
                 for col in numeric_columns:
                     if col in daily_df.columns:
                         daily_df[col] = pd.to_numeric(daily_df[col], errors="coerce").fillna(0)
 
-                # 날짜를 datetime으로 변환
-                daily_df["date"] = pd.to_datetime(daily_df["date_str"])
+                # 날짜를 datetime으로 변환 (MM-DD-YYYY 형식)
+                daily_df["date"] = pd.to_datetime(daily_df["date_str"], format='%m-%d-%Y')
 
                 # 표시용 DataFrame 생성
                 display_df = daily_df.copy()
                 display_df["날짜"] = display_df["date"].dt.strftime("%Y-%m-%d")
                 display_df = display_df[
-                    ["날짜", "total_requests", "total_agentic_requests", "total_cli_requests", "unique_users"]
+                    ["날짜", "total_chat_messages", "total_inline_suggestions", "total_inline_acceptances", "unique_users"]
                 ]
-                display_df.columns = ["날짜", "총 요청 수", "Agentic 요청", "CLI 요청", "활성 사용자"]
+                display_df.columns = ["날짜", "채팅 메시지", "인라인 제안", "인라인 수락", "활성 사용자"]
 
                 # 1. 테이블 먼저 표시
                 st.dataframe(display_df, use_container_width=True)
@@ -1446,41 +1869,41 @@ def render_qcli_analytics(selected_region, start_date, end_date):
                 import plotly.express as px
                 import plotly.graph_objects as go
 
-                # 일별 요청 패턴
+                # 일별 채팅 메시지 패턴
                 fig = px.line(
                     daily_df,
                     x="date",
-                    y="total_requests",
-                    title="일별 총 요청 수",
-                    labels={"date": "날짜", "total_requests": "총 요청 수"},
+                    y="total_chat_messages",
+                    title="일별 채팅 메시지 수",
+                    labels={"date": "날짜", "total_chat_messages": "채팅 메시지 수"},
                     markers=True,
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
-                # 일별 요청 유형별 분포
+                # 일별 인라인 제안 vs 수락
                 fig2 = go.Figure()
                 fig2.add_trace(
                     go.Scatter(
                         x=daily_df["date"],
-                        y=daily_df["total_agentic_requests"],
+                        y=daily_df["total_inline_suggestions"],
                         mode="lines+markers",
-                        name="Agentic 요청",
+                        name="인라인 제안",
                         line=dict(color="blue"),
                     )
                 )
                 fig2.add_trace(
                     go.Scatter(
                         x=daily_df["date"],
-                        y=daily_df["total_cli_requests"],
+                        y=daily_df["total_inline_acceptances"],
                         mode="lines+markers",
-                        name="CLI 요청",
+                        name="인라인 수락",
                         line=dict(color="green"),
                     )
                 )
                 fig2.update_layout(
-                    title="일별 요청 유형별 분포",
+                    title="일별 인라인 코드 제안 vs 수락",
                     xaxis_title="날짜",
-                    yaxis_title="요청 수",
+                    yaxis_title="개수",
                     hovermode="x unified",
                 )
                 st.plotly_chart(fig2, use_container_width=True)
