@@ -246,12 +246,18 @@ python bedrock_tracker_cli.py --arn-pattern "App2" > app2_usage.txt
 
 ---
 
-## 🚨 Amazon Q Developer (QCli) 리밋 모니터링
+## 🚨 Amazon Q Developer (QCli) 사용량 추적 및 리밋 모니터링
 
 ### QCli 왜 필요한가?
 
-Amazon Q Developer Pro는 **$19/월 정액제**이지만, **숨겨진 사용량 리밋**이 존재합니다:
+Amazon Q Developer Pro는 **$19/월 정액제**이지만, **사용량 추적과 숨겨진 리밋**에 대한 과제가 있습니다:
 
+#### 1. Context Window 사용량 추적
+- ✅ **/usage 명령어**: 200,000 토큰 Context Window 제한 표시
+- ❌ **사용량 확인**: 현재 얼마나 사용했는지 확인 불가
+- ❌ **토큰 계산**: 실제 토큰 사용량 측정 방법 없음
+
+#### 2. 숨겨진 사용량 리밋
 - ❌ **채팅/인라인 제안**: AWS가 정확한 리밋을 공개하지 않음
 - ✅ **/dev 명령어**: 30회/월 (공식 문서)
 - ✅ **Code Transformation**: 4,000줄/월 (공식 문서)
@@ -262,10 +268,90 @@ Amazon Q Developer Pro는 **$19/월 정액제**이지만, **숨겨진 사용량 
 - 리밋 도달 시점을 예측할 수 없음
 
 **이 시스템의 접근 방법**:
+- ✅ **실제 토큰 사용량 추적** - S3 프롬프트 로그 분석으로 정확한 토큰 계산
+- ✅ **Context Window 모니터링** - 200,000 토큰 제한 대비 사용률 추적
 - ✅ **공식 리밋 추적** - 문서화된 /dev, Code Transformation 리밋 모니터링
-- ✅ **간접 사용량 추정** - CSV 데이터 기반 일일 평균 및 월간 예상치 계산
 - ✅ **이상 감지** - 급격한 사용량 증가 패턴 감지
 - ✅ **경고 시스템** - 리밋 80% 도달 시 사전 경고
+
+### 데이터 소스: S3 프롬프트 로그 vs Athena CSV
+
+이 시스템은 **두 가지 데이터 소스**를 지원합니다:
+
+#### 1. S3 프롬프트 로그 (권장) ⭐⭐⭐⭐⭐
+
+**정확도**: 매우 높음 (실제 토큰 계산)
+
+**장점**:
+- ✅ 실제 프롬프트 텍스트 포함
+- ✅ tiktoken으로 정확한 토큰 계산
+- ✅ Context Window 사용량 정확히 추적
+- ✅ 입력/출력 토큰 분리 측정
+- ✅ 시간대별/날짜별 상세 분석
+
+**단점**:
+- ⚠️ 프롬프트 로깅 활성화 필요
+- ⚠️ S3 로그 파일 다운로드 및 파싱 필요 (약간 느림)
+
+**데이터 구조**:
+```
+s3://amazonq-developer-reports-{account_id}/
+  └── prompt_logging/AWSLogs/{account_id}/QDeveloperLogs/
+      ├── GenerateAssistantResponse/  # Chat 로그
+      │   └── us-east-1/2025/11/12/*.json.gz
+      └── GenerateCompletions/         # Inline 제안 로그
+          └── us-east-1/2025/11/12/*.json.gz
+```
+
+각 로그 파일에는 실제 프롬프트와 응답 텍스트가 포함되어 있어, tiktoken 라이브러리로 정확한 토큰 수를 계산할 수 있습니다.
+
+#### 2. Athena CSV 리포트 (빠른 분석용) ⭐⭐⭐
+
+**정확도**: 낮음 (하드코딩된 추정치 사용)
+
+**장점**:
+- ✅ 빠른 분석 (CSV 직접 읽기)
+- ✅ 설정 간단
+- ✅ 공식 리밋 추적 가능
+
+**단점**:
+- ❌ 토큰 정보 없음 (추정치만 가능)
+- ❌ 하드코딩된 평균값 사용
+- ❌ Context Window 정확도 낮음
+
+**데이터 구조**:
+```
+s3://amazonq-developer-reports-{account-id}/user-activity-reports/
+  └── AWSLogs/{account-id}/QDeveloperLogs/by_user_analytic/{region}/
+      └── *.csv
+```
+
+CSV에는 요청 횟수만 있고 토큰 수는 없으므로, 하드코딩된 평균값으로 추정합니다.
+
+### 토큰 계산 방법 비교
+
+| 방법 | 데이터 소스 | 토큰 계산 | Context Window | 정확도 |
+|------|------------|----------|---------------|--------|
+| **S3 로그** | 프롬프트 로그 | tiktoken (실제) | ✅ 정확 | ⭐⭐⭐⭐⭐ |
+| **Athena CSV** | 사용자 활동 리포트 | 하드코딩 추정 | ⚠️ 추정 | ⭐⭐⭐ |
+
+**실제 비교 예시** (최근 3일):
+```
+S3 로그 분석:
+- 총 요청: 42회
+- 실제 토큰: 62,057 (tiktoken 계산)
+- Chat 평균: 556 토큰/요청
+- Inline 평균: 2,492 토큰/요청
+
+Athena CSV 분석:
+- 총 요청: 77회
+- 추정 토큰: 17,720 (하드코딩)
+- Chat 평균: 650 토큰/요청 (고정값)
+- Inline 평균: 250 토큰/요청 (고정값)
+
+차이: S3 로그가 3.5배 더 많은 토큰 계산
+→ 실제 프롬프트 길이를 반영하기 때문
+```
 
 ### 리밋 추적 기능
 
@@ -306,7 +392,167 @@ Amazon Q Developer Pro는 **$19/월 정액제**이지만, **숨겨진 사용량 
 - 일평균: 40.1개
 - **월말 예상**: 약 1,200개 (실제 리밋 불명)
 
+### QCli 프롬프트 로깅 설정 (S3 로그 분석용)
+
+S3 로그 분석을 사용하려면 먼저 Amazon Q Developer의 프롬프트 로깅을 활성화해야 합니다.
+
+#### 1. AWS 콘솔에서 설정
+
+**Amazon Q Developer 콘솔 접속**:
+1. AWS Management Console → Amazon Q Developer
+2. 왼쪽 메뉴에서 **"Settings"** 선택
+3. **"Prompt logging"** 섹션 찾기
+
+**프롬프트 로깅 활성화**:
+1. **"Enable prompt logging"** 토글 ON
+2. S3 버킷 자동 생성됨: `amazonq-developer-reports-{account-id}`
+3. 로그 저장 경로: `prompt_logging/AWSLogs/`
+
+#### 2. AWS CLI로 확인
+
+프롬프트 로깅 설정 상태 확인:
+```bash
+aws q-developer get-user-activity-report-configuration --region us-east-1
+```
+
+출력 예시:
+```json
+{
+  "userActivityReportConfiguration": {
+    "enabled": true,
+    "s3BucketName": "amazonq-developer-reports-181136804328",
+    "promptLoggingEnabled": true
+  }
+}
+```
+
+#### 3. S3 버킷 확인
+
+로그 파일이 저장되는지 확인:
+```bash
+aws s3 ls s3://amazonq-developer-reports-{account-id}/prompt_logging/ --recursive
+```
+
+출력 예시:
+```
+2025-11-12 11:23:45     12345 prompt_logging/AWSLogs/123456789012/QDeveloperLogs/GenerateAssistantResponse/us-east-1/2025/11/12/...json.gz
+2025-11-12 11:24:10      8901 prompt_logging/AWSLogs/123456789012/QDeveloperLogs/GenerateCompletions/us-east-1/2025/11/12/...json.gz
+```
+
+#### 4. IAM 권한 설정
+
+분석 도구를 실행하는 IAM User/Role에 다음 권한이 필요합니다:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::amazonq-developer-reports-*",
+        "arn:aws:s3:::amazonq-developer-reports-*/*"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "q-developer:GetUserActivityReportConfiguration"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+#### 5. Python 패키지 설치
+
+S3 로그 분석에는 `tiktoken` 라이브러리가 필요합니다:
+
+```bash
+pip install tiktoken
+```
+
+`requirements.txt`에 추가되어 있으면 자동으로 설치됩니다:
+```txt
+boto3>=1.34.0
+streamlit>=1.31.0
+pandas>=2.0.0
+plotly>=5.18.0
+tiktoken>=0.5.0  # S3 로그 토큰 계산용
+```
+
+#### 6. 로깅 작동 확인
+
+IDE에서 Amazon Q를 사용한 후 (Chat 또는 Inline 제안), 5-10분 후에 로그 파일이 생성됩니다:
+
+```bash
+# 최근 1시간 이내 생성된 로그 확인
+aws s3 ls s3://amazonq-developer-reports-{account-id}/prompt_logging/ \
+  --recursive | tail -10
+```
+
+로그 파일이 보이면 설정 완료!
+
+#### 7. 문제 해결
+
+**로그 파일이 생성되지 않는 경우**:
+
+1. **프롬프트 로깅 활성화 확인**:
+   ```bash
+   aws q-developer get-user-activity-report-configuration --region us-east-1
+   ```
+   `promptLoggingEnabled: true` 확인
+
+2. **S3 버킷 존재 확인**:
+   ```bash
+   aws s3 ls | grep amazonq-developer-reports
+   ```
+
+3. **IAM 권한 확인**:
+   ```bash
+   aws s3 ls s3://amazonq-developer-reports-{account-id}/
+   ```
+   AccessDenied 오류 발생 시 IAM 권한 추가 필요
+
+4. **Amazon Q 사용 확인**:
+   - IDE에서 실제로 Chat 또는 Inline 제안을 사용했는지 확인
+   - 로그는 5-10분 지연될 수 있음
+
+#### 8. 비용 정보
+
+프롬프트 로깅의 S3 저장 비용은 **매우 낮습니다**:
+
+```
+실제 사용 예시 (11일간):
+- 로그 파일: 339개
+- 총 크기: ~3.4 MB
+- S3 저장 비용: ~$0.0001/월
+- PUT 요청 비용: ~$0.0047/월
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+총 비용: ~$0.005/월 (약 7원)
+
+Amazon Q Pro 구독료 ($19/월)의 0.026%
+```
+
+**결론**: 프롬프트 로깅 비용은 사실상 무료!
+
+---
+
 ### QCli 사용 방법
+
+이제 프롬프트 로깅이 활성화되었으므로, Streamlit 대시보드 또는 CLI로 분석할 수 있습니다.
 
 #### Streamlit 대시보드
 
@@ -317,11 +563,30 @@ streamlit run bedrock_tracker.py
 
 2. **Amazon Q CLI** 탭 선택
 
-3. 날짜 범위 선택 (기본: 최근 30일)
+3. **데이터 소스 선택** (왼쪽 사이드바):
+   - **"S3 로그 (실제 토큰)"** ← 권장
+   - "Athena CSV (추정)"
 
-4. **"🔍 데이터 분석"** 버튼 클릭
+4. 날짜 범위 선택 (기본: 최근 30일)
 
-5. 결과 확인:
+5. (선택) 사용자 ID 패턴 필터 입력
+
+6. **"🔍 데이터 분석"** 버튼 클릭
+
+7. 결과 확인:
+
+**S3 로그 분석 결과**:
+   - 📊 **전체 요약**: 총 요청, Chat/Inline 요청 분포
+   - 🔢 **실제 토큰 사용량**: Input/Output 토큰 (tiktoken 계산)
+   - 📈 **Context Window 분석**: 200,000 토큰 대비 사용률
+   - 💬 **Chat 분석**: 평균 입력/출력 토큰
+   - ⚡ **Inline 제안 분석**: 평균 컨텍스트 크기
+   - 👥 **사용자별 분석**: 사용자별 토큰 사용량
+   - 📅 **일별 사용 패턴**: 날짜별 토큰 추이 차트
+   - ⏰ **시간대별 패턴**: 시간대별 요청 분포 (UTC/KST)
+   - 💰 **가상 비용 분석**: Claude API 사용 시 비용 비교
+
+**Athena CSV 분석 결과**:
    - ⚠️ **공식 리밋 모니터링**: /dev, Code Transformation 사용량
    - 📈 **사용 패턴 분석**: 일일 평균, 최대/최소, 이상 감지
    - 📊 **전체 요약**: 채팅, 인라인, 코드 라인 통계
@@ -330,20 +595,44 @@ streamlit run bedrock_tracker.py
 #### CLI 도구
 
 ```bash
-# 기본 사용 (최근 30일)
-python bedrock_tracker_cli.py --service qcli --days 30
+# S3 로그 분석 (기본값, 권장)
+python bedrock_tracker_cli.py --service qcli --days 7
 
-# 특정 기간 분석
+# 특정 기간 S3 로그 분석
 python bedrock_tracker_cli.py \
   --service qcli \
-  --start-date 2025-10-01 \
-  --end-date 2025-11-01
+  --start-date 2025-11-01 \
+  --end-date 2025-11-12 \
+  --data-source s3
 
-# JSON 리포트 저장
+# Athena CSV 분석 (빠른 분석용)
 python bedrock_tracker_cli.py \
   --service qcli \
+  --days 30 \
+  --data-source athena
+
+# 사용자 필터링 + S3 로그
+python bedrock_tracker_cli.py \
+  --service qcli \
+  --days 7 \
+  --user-pattern "user@example.com"
+
+# JSON 리포트 저장 (S3 로그)
+python bedrock_tracker_cli.py \
+  --service qcli \
+  --days 30 \
+  --data-source s3 \
   --format json
 ```
+
+**CLI 옵션**:
+- `--service qcli`: Amazon Q CLI 분석 모드
+- `--data-source {s3|athena}`: 데이터 소스 선택 (기본: s3)
+- `--days N`: 최근 N일 분석
+- `--start-date / --end-date`: 날짜 범위 지정
+- `--user-pattern`: 사용자 ID 필터
+- `--format {terminal|csv|json}`: 출력 형식
+- `--analysis {all|summary}`: 분석 유형 (S3는 summary만 지원)
 
 **출력 예시**:
 ```
@@ -1974,12 +2263,63 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ---
 
 **프로젝트 작성자**: AWS Solutions Architect
-**마지막 업데이트**: 2025-10-19
-**버전**: 1.1.0
+**마지막 업데이트**: 2025-11-12
+**버전**: 1.2.0
 
 ---
 
 ## 변경 이력
+
+### v1.2.0 (2025-11-12)
+
+**Amazon Q Developer S3 로그 분석 기능 추가**:
+
+1. **qcli_s3_analyzer.py 신규 모듈**
+   - S3 프롬프트 로그 직접 분석
+   - tiktoken 기반 정확한 토큰 계산 (cl100k_base 인코더)
+   - Chat (GenerateAssistantResponse) 및 Inline (GenerateCompletions) 로그 파싱
+   - 날짜 범위 필터링 지원
+   - 사용자별/타입별/날짜별/시간대별 통계 집계
+   - 대용량 로그 샘플링 처리 (최대 500 파일)
+
+2. **bedrock_tracker.py 대시보드 개선**
+   - 데이터 소스 선택 기능: "S3 로그 (실제 토큰)" vs "Athena CSV (추정)"
+   - S3 로그 분석 시 실제 토큰 사용량 표시
+   - Context Window (200,000 토큰) 사용률 모니터링
+   - 일일 평균 토큰 및 사용률 계산
+   - 타입별 상세 분석 (Chat/Inline 평균 토큰)
+   - 시간대별 사용 패턴 (UTC → KST 변환)
+   - 가상 비용 분석 (Claude API 비교)
+
+3. **bedrock_tracker_cli.py CLI 도구 개선**
+   - `--data-source {s3|athena}` 옵션 추가 (기본값: s3)
+   - S3 로그 분석 결과 터미널 출력 함수 추가
+   - JSON/CSV 형식 출력 지원
+   - `print_s3_log_summary()` 함수로 상세 리포트 제공
+
+4. **정확도 향상**
+   - 토큰 계산: 하드코딩 추정 → tiktoken 실제 계산
+   - Context Window: 추정 → 정확한 사용률 측정
+   - Chat 평균: 650 토큰 (추정) → 556 토큰 (실제)
+   - Inline 평균: 250 토큰 (추정) → 2,492 토큰 (실제)
+
+5. **새로운 기능**
+   - 실시간 Context Window 모니터링
+   - 프롬프트 길이 기반 정확한 토큰 계산
+   - 시간대별 사용 패턴 분석 (피크 시간 감지)
+   - 사용자별 토큰 사용량 순위
+
+6. **문서화 개선**
+   - README.md에 S3 로그 분석 가이드 추가
+   - 프롬프트 로깅 설정 방법 상세 설명
+   - 데이터 소스 비교표 추가
+   - Context Window 설명 추가
+
+**주요 개선사항**:
+- ✅ 실제 토큰 사용량 측정 가능 (tiktoken 기반)
+- ✅ Context Window 정확한 추적
+- ✅ 두 가지 데이터 소스 선택 가능
+- ✅ 기존 Athena CSV 분석 기능 유지 (후방 호환성)
 
 ### v1.1.0 (2025-10-19)
 

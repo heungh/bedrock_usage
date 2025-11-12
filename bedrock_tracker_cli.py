@@ -15,6 +15,9 @@ from pathlib import Path
 import json
 import sys
 
+# S3 로그 분석기 임포트
+from qcli_s3_analyzer import QCliS3LogAnalyzer
+
 # 로깅 설정
 def setup_logger():
     """디버깅용 로거 설정"""
@@ -1164,6 +1167,127 @@ def print_qcli_summary(summary: Dict, token_estimates: Dict, limit_check: Dict =
         print("="*80 + "\n")
 
 
+def print_s3_log_summary(stats: Dict):
+    """S3 로그 분석 결과 요약 출력"""
+    print("\n" + "="*80)
+    print("📊 Amazon Q Developer S3 로그 분석 결과".center(80))
+    print("="*80)
+
+    # 기본 통계
+    print("\n📋 기본 통계:")
+    print(f"  분석 기간:        {stats['period']['days']}일")
+    print(f"  총 로그 파일:     {stats['total_log_files']:>15,}")
+    print(f"  총 요청 수:       {stats['total_requests']:>15,}")
+    print(f"  Chat 요청:        {stats['by_type']['chat']['count']:>15,} ({stats['by_type']['chat']['count']/stats['total_requests']*100 if stats['total_requests'] > 0 else 0:.1f}%)")
+    print(f"  Inline 제안:      {stats['by_type']['inline']['count']:>15,} ({stats['by_type']['inline']['count']/stats['total_requests']*100 if stats['total_requests'] > 0 else 0:.1f}%)")
+
+    # 토큰 사용량
+    print("\n🔢 실제 토큰 사용량:")
+    print(f"  Input 토큰:       {stats['total_input_tokens']:>15,}")
+    print(f"  Output 토큰:      {stats['total_output_tokens']:>15,}")
+    print(f"  총 토큰:          {stats['total_tokens']:>15,}")
+
+    # Context Window 분석
+    context_window = 200000
+    usage_rate = (stats['total_tokens'] / context_window) * 100
+    days_in_period = stats['period']['days']
+    daily_avg = stats['total_tokens'] / days_in_period if days_in_period > 0 else 0
+    daily_usage_rate = (daily_avg / context_window) * 100
+
+    print("\n📈 Context Window 분석:")
+    print(f"  Context Window:   {context_window:>15,} 토큰/세션")
+    print(f"  누적 사용률:      {usage_rate:>14.2f}% ({stats['total_tokens']:,} 토큰)")
+    print(f"  일일 평균 토큰:   {daily_avg:>15,.0f}")
+    print(f"  일일 사용률:      {daily_usage_rate:>14.2f}%")
+    print("\n  💡 Context Window는 세션별로 독립 관리되므로,")
+    print("     누적 사용률보다 세션당 사용률이 중요합니다.")
+
+    # 타입별 상세 분석
+    print("\n📊 타입별 상세 분석:")
+
+    # Chat
+    chat_stats = stats['by_type']['chat']
+    if chat_stats['count'] > 0:
+        chat_avg_input = chat_stats['input_tokens'] / chat_stats['count']
+        chat_avg_output = chat_stats['output_tokens'] / chat_stats['count']
+        chat_avg_total = (chat_stats['input_tokens'] + chat_stats['output_tokens']) / chat_stats['count']
+
+        print(f"\n  💬 Chat (대화):")
+        print(f"     요청 수:       {chat_stats['count']:>10,}")
+        print(f"     평균 입력:     {chat_avg_input:>10,.0f} 토큰")
+        print(f"     평균 출력:     {chat_avg_output:>10,.0f} 토큰")
+        print(f"     평균 총합:     {chat_avg_total:>10,.0f} 토큰")
+
+    # Inline
+    inline_stats = stats['by_type']['inline']
+    if inline_stats['count'] > 0:
+        inline_avg_input = inline_stats['input_tokens'] / inline_stats['count']
+
+        print(f"\n  ⚡ Inline 제안:")
+        print(f"     요청 수:       {inline_stats['count']:>10,}")
+        print(f"     평균 컨텍스트: {inline_avg_input:>10,.0f} 토큰")
+        if inline_stats['output_tokens'] == 0:
+            print(f"     평균 출력:     로그에 없음")
+        else:
+            inline_avg_output = inline_stats['output_tokens'] / inline_stats['count']
+            print(f"     평균 출력:     {inline_avg_output:>10,.0f} 토큰")
+
+    # 가상 비용 계산
+    print("\n💰 가상 비용 분석 (참고용):")
+    print("   💡 Amazon Q Developer Pro는 $19/월 정액제입니다.")
+    print("      아래 비용은 Claude API를 직접 사용했을 경우 가정입니다.\n")
+
+    MODEL_PRICING = {
+        "input": 0.003 / 1000,
+        "output": 0.015 / 1000,
+    }
+
+    virtual_cost = (
+        stats['total_input_tokens'] * MODEL_PRICING['input'] +
+        stats['total_output_tokens'] * MODEL_PRICING['output']
+    )
+
+    print(f"  Input 비용:       ${stats['total_input_tokens'] * MODEL_PRICING['input']:>14.2f}")
+    print(f"  Output 비용:      ${stats['total_output_tokens'] * MODEL_PRICING['output']:>14.2f}")
+    print(f"  총 가상 비용:     ${virtual_cost:>14.2f}")
+
+    # ROI 비교
+    subscription_cost = 19.0
+    prorated_subscription = subscription_cost * (days_in_period / 30)
+
+    print(f"\n  구독료 (일할):    ${prorated_subscription:>14.2f}")
+    print(f"  가상 사용 비용:   ${virtual_cost:>14.2f}")
+
+    savings = virtual_cost - prorated_subscription
+    if savings > 0:
+        savings_pct = (savings / virtual_cost) * 100
+        print(f"  절감액:           ${savings:>14.2f} ({savings_pct:.1f}% 절감)")
+    else:
+        loss_pct = (-savings / prorated_subscription) * 100 if prorated_subscription > 0 else 0
+        print(f"  손실:             ${-savings:>14.2f} ({loss_pct:.1f}% 손실)")
+
+    # 사용자 정보
+    if stats['by_user']:
+        print(f"\n👥 사용자 분석:")
+        print(f"  분석된 사용자:    {len(stats['by_user']):>15,}명")
+
+        # 상위 3명 표시
+        sorted_users = sorted(
+            stats['by_user'].items(),
+            key=lambda x: x[1]['input_tokens'] + x[1]['output_tokens'],
+            reverse=True
+        )
+
+        if len(sorted_users) > 0:
+            print(f"\n  상위 사용자 (토큰 기준):")
+            for i, (user_id, user_stats) in enumerate(sorted_users[:3], 1):
+                total_tokens = user_stats['input_tokens'] + user_stats['output_tokens']
+                print(f"    {i}. {user_id[:40]}...")
+                print(f"       요청: {user_stats['requests']:,}, 토큰: {total_tokens:,}")
+
+    print("="*80 + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description='AWS Analytics CLI - Athena 기반 (Bedrock & Amazon Q CLI)')
     parser.add_argument('--service',
@@ -1190,13 +1314,18 @@ def main():
                        help='ARN 패턴 필터 (Bedrock용, 예: AmazonQ-CLI, q-cli)')
     parser.add_argument('--user-pattern', type=str, default='',
                        help='사용자 ID 패턴 필터 (QCli용, 예: user@example.com)')
+    parser.add_argument('--data-source',
+                       choices=['s3', 'athena'],
+                       default='s3',
+                       help='QCli 데이터 소스 (s3: 실제 토큰, athena: 추정, 기본값: s3)')
 
     args = parser.parse_args()
 
     if args.service == 'bedrock':
         print("🚀 Bedrock Analytics CLI (Athena 기반)")
     else:
-        print("🚀 Amazon Q CLI Analytics (Athena 기반)")
+        data_source_desc = "S3 로그 (실제 토큰)" if args.data_source == 's3' else "Athena CSV (추정)"
+        print(f"🚀 Amazon Q CLI Analytics ({data_source_desc})")
     print("="*80)
 
     # 날짜 범위 설정
@@ -1374,126 +1503,180 @@ def analyze_bedrock(args, start_date: datetime, end_date: datetime, arn_pattern:
 
 def analyze_qcli(args, start_date: datetime, end_date: datetime, user_pattern: str = None):
     """QCli 분석 실행"""
-    # Tracker 초기화
-    tracker = QCliAthenaTracker(region=args.region)
-
     print("📊 Amazon Q CLI 데이터 분석 중...\n")
 
-    # 데이터 수집
-    results = {}
+    # 데이터 소스별로 다른 분석 실행
+    if args.data_source == 's3':
+        # S3 로그 분석
+        try:
+            s3_analyzer = QCliS3LogAnalyzer(region=args.region, logger=logger)
 
-    if args.analysis in ['all', 'summary']:
-        summary = tracker.get_total_summary(start_date, end_date, user_pattern)
-        results['summary'] = summary
+            # S3 로그 분석 실행
+            stats = s3_analyzer.analyze_usage(start_date, end_date, user_pattern)
 
-        # 토큰 추정
-        token_conservative = tracker.estimate_tokens(summary, "conservative")
-        token_average = tracker.estimate_tokens(summary, "average")
-        token_optimistic = tracker.estimate_tokens(summary, "optimistic")
+            # 결과 출력
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        results['token_estimates'] = {
-            "conservative": token_conservative,
-            "average": token_average,
-            "optimistic": token_optimistic
-        }
+            if args.format == 'terminal':
+                print_s3_log_summary(stats)
+            elif args.format == 'json':
+                filename = f"qcli_s3_analysis_{args.region}_{timestamp}.json"
+                save_to_json(stats, filename)
+            elif args.format == 'csv':
+                # S3 데이터를 DataFrame으로 변환하여 CSV 저장
+                if stats['by_user']:
+                    user_data = []
+                    for user_id, user_stats in stats['by_user'].items():
+                        user_data.append({
+                            '사용자 ID': user_id,
+                            '요청 수': user_stats['requests'],
+                            'Input 토큰': user_stats['input_tokens'],
+                            'Output 토큰': user_stats['output_tokens'],
+                            '총 토큰': user_stats['input_tokens'] + user_stats['output_tokens']
+                        })
+                    user_df = pd.DataFrame(user_data)
+                    filename = f"qcli_s3_users_{args.region}_{timestamp}.csv"
+                    save_to_csv(user_df, filename)
 
-        # 리밋 체크 및 추세 분석 추가
-        days_in_period = (end_date - start_date).days + 1
-        results['limit_check'] = tracker.check_official_limits(summary, days_in_period)
-        results['trends'] = tracker.analyze_usage_trends(start_date, end_date, user_pattern)
+                if stats['by_date']:
+                    date_data = []
+                    for date_str, date_stats in stats['by_date'].items():
+                        date_data.append({
+                            '날짜': date_str,
+                            '요청 수': date_stats['requests'],
+                            'Input 토큰': date_stats['input_tokens'],
+                            'Output 토큰': date_stats['output_tokens'],
+                            '총 토큰': date_stats['input_tokens'] + date_stats['output_tokens']
+                        })
+                    date_df = pd.DataFrame(date_data)
+                    filename = f"qcli_s3_daily_{args.region}_{timestamp}.csv"
+                    save_to_csv(date_df, filename)
 
-    if args.analysis in ['all', 'user']:
-        user_df = tracker.get_user_usage_analysis(start_date, end_date, user_pattern)
-        if not user_df.empty:
-            numeric_columns = [
-                "total_chat_messages",
-                "total_inline_suggestions",
-                "total_inline_acceptances",
-                "total_chat_code_lines",
-                "total_inline_code_lines",
-                "total_dev_events",
-                "total_test_events",
-                "total_doc_events",
-                "active_days",
-            ]
-            for col in numeric_columns:
-                if col in user_df.columns:
-                    user_df[col] = pd.to_numeric(user_df[col], errors='coerce').fillna(0)
-        results['user'] = user_df
+        except Exception as e:
+            logger.error(f"S3 로그 분석 중 오류: {e}", exc_info=True)
+            print(f"❌ S3 로그 분석 중 오류가 발생했습니다: {e}")
+            print("💡 프롬프트 로깅이 활성화되어 있는지, S3 버킷에 로그 파일이 있는지 확인하세요.")
+            return
 
-    if args.analysis in ['all', 'feature']:
-        feature_df = tracker.get_feature_usage_stats(start_date, end_date, user_pattern)
-        if not feature_df.empty:
-            for col in ["total_count", "unique_users"]:
-                if col in feature_df.columns:
-                    feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce').fillna(0)
-        results['feature'] = feature_df
+    else:
+        # 기존 Athena CSV 분석
+        tracker = QCliAthenaTracker(region=args.region)
 
-    if args.analysis in ['all', 'daily']:
-        daily_df = tracker.get_daily_usage_pattern(start_date, end_date, user_pattern)
-        if not daily_df.empty:
-            numeric_columns = [
-                "total_chat_messages",
-                "total_inline_suggestions",
-                "total_inline_acceptances",
-                "total_chat_code_lines",
-                "total_inline_code_lines",
-                "unique_users",
-            ]
-            for col in numeric_columns:
-                if col in daily_df.columns:
-                    daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').fillna(0)
-        results['daily'] = daily_df
+        # 데이터 수집
+        results = {}
 
-    # 출력 형식에 따라 결과 출력
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        if args.analysis in ['all', 'summary']:
+            summary = tracker.get_total_summary(start_date, end_date, user_pattern)
+            results['summary'] = summary
 
-    if args.format == 'terminal':
-        # 터미널 출력
-        if 'summary' in results and 'token_estimates' in results:
-            print_qcli_summary(
-                results['summary'],
-                results['token_estimates'],
-                results.get('limit_check'),
-                results.get('trends')
-            )
+            # 토큰 추정
+            token_conservative = tracker.estimate_tokens(summary, "conservative")
+            token_average = tracker.estimate_tokens(summary, "average")
+            token_optimistic = tracker.estimate_tokens(summary, "optimistic")
 
-        if 'user' in results and not results['user'].empty:
-            print_dataframe_table(results['user'], "👥 사용자별 분석", args.max_rows)
+            results['token_estimates'] = {
+                "conservative": token_conservative,
+                "average": token_average,
+                "optimistic": token_optimistic
+            }
 
-        if 'feature' in results and not results['feature'].empty:
-            print_dataframe_table(results['feature'], "📱 기능별 사용 통계", args.max_rows)
+            # 리밋 체크 및 추세 분석 추가
+            days_in_period = (end_date - start_date).days + 1
+            results['limit_check'] = tracker.check_official_limits(summary, days_in_period)
+            results['trends'] = tracker.analyze_usage_trends(start_date, end_date, user_pattern)
 
-        if 'daily' in results and not results['daily'].empty:
-            print_dataframe_table(results['daily'], "📅 일별 사용 패턴", args.max_rows)
+        if args.analysis in ['all', 'user']:
+            user_df = tracker.get_user_usage_analysis(start_date, end_date, user_pattern)
+            if not user_df.empty:
+                numeric_columns = [
+                    "total_chat_messages",
+                    "total_inline_suggestions",
+                    "total_inline_acceptances",
+                    "total_chat_code_lines",
+                    "total_inline_code_lines",
+                    "total_dev_events",
+                    "total_test_events",
+                    "total_doc_events",
+                    "active_days",
+                ]
+                for col in numeric_columns:
+                    if col in user_df.columns:
+                        user_df[col] = pd.to_numeric(user_df[col], errors='coerce').fillna(0)
+            results['user'] = user_df
 
-    elif args.format == 'csv':
-        # CSV 저장
-        for key, data in results.items():
-            if key in ['summary', 'token_estimates']:
-                continue
-            if isinstance(data, pd.DataFrame) and not data.empty:
-                filename = f"qcli_{key}_{args.region}_{timestamp}.csv"
-                save_to_csv(data, filename)
+        if args.analysis in ['all', 'feature']:
+            feature_df = tracker.get_feature_usage_stats(start_date, end_date, user_pattern)
+            if not feature_df.empty:
+                for col in ["total_count", "unique_users"]:
+                    if col in feature_df.columns:
+                        feature_df[col] = pd.to_numeric(feature_df[col], errors='coerce').fillna(0)
+            results['feature'] = feature_df
 
-    elif args.format == 'json':
-        # JSON 저장
-        json_data = {}
+        if args.analysis in ['all', 'daily']:
+            daily_df = tracker.get_daily_usage_pattern(start_date, end_date, user_pattern)
+            if not daily_df.empty:
+                numeric_columns = [
+                    "total_chat_messages",
+                    "total_inline_suggestions",
+                    "total_inline_acceptances",
+                    "total_chat_code_lines",
+                    "total_inline_code_lines",
+                    "unique_users",
+                ]
+                for col in numeric_columns:
+                    if col in daily_df.columns:
+                        daily_df[col] = pd.to_numeric(daily_df[col], errors='coerce').fillna(0)
+            results['daily'] = daily_df
 
-        if 'summary' in results:
-            json_data['summary'] = results['summary']
+        # 출력 형식에 따라 결과 출력
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        if 'token_estimates' in results:
-            json_data['token_estimates'] = results['token_estimates']
+        if args.format == 'terminal':
+            # 터미널 출력
+            if 'summary' in results and 'token_estimates' in results:
+                print_qcli_summary(
+                    results['summary'],
+                    results['token_estimates'],
+                    results.get('limit_check'),
+                    results.get('trends')
+                )
 
-        for key, data in results.items():
-            if key in ['summary', 'token_estimates']:
-                continue
-            if isinstance(data, pd.DataFrame) and not data.empty:
-                json_data[key] = data.to_dict(orient='records')
+            if 'user' in results and not results['user'].empty:
+                print_dataframe_table(results['user'], "👥 사용자별 분석", args.max_rows)
 
-        filename = f"qcli_analysis_{args.region}_{timestamp}.json"
-        save_to_json(json_data, filename)
+            if 'feature' in results and not results['feature'].empty:
+                print_dataframe_table(results['feature'], "📱 기능별 사용 통계", args.max_rows)
+
+            if 'daily' in results and not results['daily'].empty:
+                print_dataframe_table(results['daily'], "📅 일별 사용 패턴", args.max_rows)
+
+        elif args.format == 'csv':
+            # CSV 저장
+            for key, data in results.items():
+                if key in ['summary', 'token_estimates']:
+                    continue
+                if isinstance(data, pd.DataFrame) and not data.empty:
+                    filename = f"qcli_{key}_{args.region}_{timestamp}.csv"
+                    save_to_csv(data, filename)
+
+        elif args.format == 'json':
+            # JSON 저장
+            json_data = {}
+
+            if 'summary' in results:
+                json_data['summary'] = results['summary']
+
+            if 'token_estimates' in results:
+                json_data['token_estimates'] = results['token_estimates']
+
+            for key, data in results.items():
+                if key in ['summary', 'token_estimates']:
+                    continue
+                if isinstance(data, pd.DataFrame) and not data.empty:
+                    json_data[key] = data.to_dict(orient='records')
+
+            filename = f"qcli_analysis_{args.region}_{timestamp}.json"
+            save_to_json(json_data, filename)
 
 
 if __name__ == "__main__":

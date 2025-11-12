@@ -8,6 +8,9 @@ import logging
 import os
 from pathlib import Path
 
+# Amazon Q Developer S3 로그 분석 모듈
+from qcli_s3_analyzer import QCliS3LogAnalyzer
+
 
 # 로깅 설정
 def setup_logger():
@@ -1530,6 +1533,16 @@ def render_qcli_analytics(selected_region, start_date, end_date):
     """Amazon Q CLI 분석 대시보드 렌더링"""
     logger.info("Rendering Amazon Q CLI Analytics")
 
+    # 데이터 소스 선택
+    st.sidebar.subheader("📊 데이터 소스 선택")
+    data_source = st.sidebar.radio(
+        "분석 데이터 소스",
+        options=["S3 로그 (실제 토큰)", "Athena CSV (추정)"],
+        index=0,
+        key="qcli_data_source",
+        help="S3 로그: 실제 프롬프트 로그에서 토큰 계산 (정확)\nAthena CSV: 사용자 활동 리포트에서 토큰 추정 (빠름)"
+    )
+
     # 사용자 패턴 필터
     st.sidebar.subheader("🔍 사용자 ID 필터 (선택사항)")
     user_pattern = st.sidebar.text_input(
@@ -1540,30 +1553,322 @@ def render_qcli_analytics(selected_region, start_date, end_date):
         help="특정 사용자 ID 패턴을 포함하는 사용자만 필터링합니다. 비워두면 전체 사용자를 표시합니다."
     )
 
-    # QCli Tracker 초기화
-    tracker = QCliAthenaTracker(region=selected_region)
-
-    # 초기 정보 표시
-    st.info(
-        "📋 **Amazon Q CLI 사용량 분석**\n\n"
-        "이 대시보드는 Amazon Q Developer의 사용자 활동 리포트 CSV 파일을 기반으로 합니다.\n"
-        "CSV 리포트는 매일 자정(UTC)에 생성되며 S3 버킷에 저장됩니다."
-    )
+    # 데이터 소스에 따라 다른 정보 표시
+    if data_source == "S3 로그 (실제 토큰)":
+        st.info(
+            "📋 **Amazon Q Developer S3 로그 분석** (실제 토큰 사용량)\n\n"
+            "이 분석은 S3에 저장된 실제 프롬프트 로그를 읽어 tiktoken으로 토큰을 계산합니다.\n"
+            "IDE에서 발생한 Chat 및 Inline 제안의 실제 토큰 사용량을 확인할 수 있습니다."
+        )
+    else:
+        st.info(
+            "📋 **Amazon Q Developer Athena 분석** (토큰 추정)\n\n"
+            "이 대시보드는 Amazon Q Developer의 사용자 활동 리포트 CSV 파일을 기반으로 합니다.\n"
+            "CSV 리포트는 매일 자정(UTC)에 생성되며 S3 버킷에 저장됩니다."
+        )
 
     # 분석 실행
     if st.sidebar.button("🔍 데이터 분석", type="primary", key="qcli_analyze"):
         logger.info("QCli Analysis button clicked")
 
-        with st.spinner("Athena에서 Amazon Q CLI 데이터 분석 중..."):
+        # 데이터 소스별로 다른 분석 로직 실행
+        if data_source == "S3 로그 (실제 토큰)":
+            # ===== S3 로그 분석 =====
+            with st.spinner("S3에서 Amazon Q Developer 프롬프트 로그 분석 중..."):
 
-            # 사용자 패턴 정보 표시
-            if user_pattern:
-                st.info(f"🔍 사용자 ID 패턴 필터링 적용: '{user_pattern}'")
+                # 사용자 패턴 정보 표시
+                if user_pattern:
+                    st.info(f"🔍 사용자 ID 패턴 필터링 적용: '{user_pattern}'")
 
-            # 전체 요약
-            summary = tracker.get_total_summary(
-                start_date, end_date, user_pattern if user_pattern else None
-            )
+                # S3 로그 분석기 초기화
+                try:
+                    s3_analyzer = QCliS3LogAnalyzer(region=selected_region, logger=logger)
+
+                    # 날짜를 datetime으로 변환
+                    from datetime import datetime, timedelta
+                    start_dt = datetime.combine(start_date, datetime.min.time())
+                    end_dt = datetime.combine(end_date, datetime.max.time())
+
+                    # S3 로그 분석 실행
+                    stats = s3_analyzer.analyze_usage(
+                        start_dt,
+                        end_dt,
+                        user_pattern if user_pattern else None
+                    )
+
+                    # 결과 표시
+                    st.header("📊 전체 요약")
+
+                    col1, col2, col3, col4 = st.columns(4)
+
+                    with col1:
+                        st.metric("총 요청 수", f"{stats['total_requests']:,}")
+
+                    with col2:
+                        st.metric("Chat 요청", f"{stats['by_type']['chat']['count']:,}")
+
+                    with col3:
+                        st.metric("Inline 제안", f"{stats['by_type']['inline']['count']:,}")
+
+                    with col4:
+                        st.metric("분석된 파일", f"{stats['total_log_files']:,}")
+
+                    # 토큰 사용량
+                    st.header("🔢 실제 토큰 사용량")
+
+                    col5, col6, col7 = st.columns(3)
+
+                    with col5:
+                        st.metric("Input 토큰", f"{stats['total_input_tokens']:,}")
+
+                    with col6:
+                        st.metric("Output 토큰", f"{stats['total_output_tokens']:,}")
+
+                    with col7:
+                        st.metric("총 토큰", f"{stats['total_tokens']:,}")
+
+                    # Context Window 사용률
+                    st.subheader("📈 Context Window 분석")
+                    context_window = 200000
+                    usage_rate = (stats['total_tokens'] / context_window) * 100
+
+                    st.metric(
+                        "누적 토큰 사용률",
+                        f"{usage_rate:.2f}%",
+                        help=f"총 {stats['total_tokens']:,} 토큰 / Context Window {context_window:,} 토큰"
+                    )
+
+                    # 기간 일수 계산
+                    days_in_period = stats['period']['days']
+                    daily_avg = stats['total_tokens'] / days_in_period if days_in_period > 0 else 0
+                    daily_usage_rate = (daily_avg / context_window) * 100
+
+                    col_ctx1, col_ctx2 = st.columns(2)
+                    with col_ctx1:
+                        st.metric("일일 평균 토큰", f"{daily_avg:,.0f}")
+                    with col_ctx2:
+                        st.metric("일일 평균 사용률", f"{daily_usage_rate:.2f}%")
+
+                    st.info(
+                        f"💡 **Context Window 정보**\n\n"
+                        f"- Context Window: **200,000 토큰 / 세션**\n"
+                        f"- 누적 사용량: **{stats['total_tokens']:,} 토큰** (기간: {days_in_period}일)\n"
+                        f"- 일일 평균: **{daily_avg:,.0f} 토큰** ({daily_usage_rate:.2f}%)\n\n"
+                        f"⚠️ Context Window는 **세션별로 독립 관리**되므로, 누적 사용률보다 **세션당 사용률**이 중요합니다."
+                    )
+
+                    # 타입별 상세 분석
+                    st.header("📊 타입별 상세 분석")
+
+                    # Chat 분석
+                    st.subheader("💬 Chat (대화)")
+                    chat_stats = stats['by_type']['chat']
+                    chat_avg_input = chat_stats['input_tokens'] / chat_stats['count'] if chat_stats['count'] > 0 else 0
+                    chat_avg_output = chat_stats['output_tokens'] / chat_stats['count'] if chat_stats['count'] > 0 else 0
+                    chat_avg_total = (chat_stats['input_tokens'] + chat_stats['output_tokens']) / chat_stats['count'] if chat_stats['count'] > 0 else 0
+
+                    col_chat1, col_chat2, col_chat3, col_chat4 = st.columns(4)
+                    with col_chat1:
+                        st.metric("요청 수", f"{chat_stats['count']:,}")
+                    with col_chat2:
+                        st.metric("평균 입력", f"{chat_avg_input:.0f} 토큰")
+                    with col_chat3:
+                        st.metric("평균 출력", f"{chat_avg_output:.0f} 토큰")
+                    with col_chat4:
+                        st.metric("평균 총합", f"{chat_avg_total:.0f} 토큰")
+
+                    # Inline 분석
+                    st.subheader("⚡ Inline 제안 (코드 자동완성)")
+                    inline_stats = stats['by_type']['inline']
+                    inline_avg_input = inline_stats['input_tokens'] / inline_stats['count'] if inline_stats['count'] > 0 else 0
+                    inline_avg_output = inline_stats['output_tokens'] / inline_stats['count'] if inline_stats['count'] > 0 else 0
+
+                    col_inline1, col_inline2, col_inline3 = st.columns(3)
+                    with col_inline1:
+                        st.metric("요청 수", f"{inline_stats['count']:,}")
+                    with col_inline2:
+                        st.metric("평균 컨텍스트", f"{inline_avg_input:.0f} 토큰")
+                    with col_inline3:
+                        if inline_avg_output == 0:
+                            st.metric("평균 출력", "로그에 없음", help="Inline 제안의 응답은 로그에 기록되지 않습니다")
+                        else:
+                            st.metric("평균 출력", f"{inline_avg_output:.0f} 토큰")
+
+                    # 사용자별 분석
+                    if stats['by_user']:
+                        st.header("👥 사용자별 분석")
+
+                        user_data = []
+                        for user_id, user_stats in stats['by_user'].items():
+                            user_data.append({
+                                '사용자 ID': user_id,
+                                '요청 수': user_stats['requests'],
+                                'Input 토큰': user_stats['input_tokens'],
+                                'Output 토큰': user_stats['output_tokens'],
+                                '총 토큰': user_stats['input_tokens'] + user_stats['output_tokens']
+                            })
+
+                        user_df = pd.DataFrame(user_data)
+                        user_df = user_df.sort_values('총 토큰', ascending=False)
+                        st.dataframe(user_df, use_container_width=True)
+
+                    # 날짜별 분석
+                    if stats['by_date']:
+                        st.header("📅 일별 사용 패턴")
+
+                        date_data = []
+                        for date_str, date_stats in stats['by_date'].items():
+                            date_data.append({
+                                '날짜': date_str,
+                                '요청 수': date_stats['requests'],
+                                'Input 토큰': date_stats['input_tokens'],
+                                'Output 토큰': date_stats['output_tokens'],
+                                '총 토큰': date_stats['input_tokens'] + date_stats['output_tokens']
+                            })
+
+                        date_df = pd.DataFrame(date_data)
+                        date_df = date_df.sort_values('날짜')
+                        st.dataframe(date_df, use_container_width=True)
+
+                        # 일별 토큰 사용량 차트
+                        import plotly.express as px
+                        fig = px.line(
+                            date_df,
+                            x='날짜',
+                            y='총 토큰',
+                            title='일별 총 토큰 사용량',
+                            markers=True
+                        )
+                        fig.update_xaxes(tickangle=45)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # 시간대별 분석
+                    if stats['by_hour']:
+                        st.header("⏰ 시간대별 사용 패턴 (UTC)")
+
+                        hour_data = []
+                        for hour, count in stats['by_hour'].items():
+                            hour_int = int(hour)
+                            kst_hour = (hour_int + 9) % 24
+                            hour_data.append({
+                                'UTC 시간': f"{hour_int:02d}:00",
+                                'KST 시간': f"{kst_hour:02d}:00",
+                                '요청 수': count
+                            })
+
+                        hour_df = pd.DataFrame(hour_data)
+                        hour_df = hour_df.sort_values('UTC 시간')
+
+                        # 테이블
+                        st.dataframe(hour_df, use_container_width=True)
+
+                        # 시간대별 요청 수 차트
+                        fig = px.bar(
+                            hour_df,
+                            x='KST 시간',
+                            y='요청 수',
+                            title='시간대별 요청 수 (한국 시간)',
+                            labels={'KST 시간': '시간대', '요청 수': '요청 수'}
+                        )
+                        fig.update_xaxes(tickangle=45)
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # 가상 비용 계산 (참고용)
+                    st.header("💰 가상 비용 분석 (참고용)")
+                    st.info(
+                        "💡 **참고**: Amazon Q Developer Pro는 **$19/월 정액제**입니다.\n\n"
+                        "아래 비용은 Claude API를 직접 사용했을 경우를 가정한 가상 비용입니다."
+                    )
+
+                    # Claude Sonnet 3.5 가격 기준
+                    MODEL_PRICING = {
+                        "input": 0.003 / 1000,  # $0.003 per 1K tokens
+                        "output": 0.015 / 1000,  # $0.015 per 1K tokens
+                    }
+
+                    virtual_cost = (
+                        stats['total_input_tokens'] * MODEL_PRICING['input'] +
+                        stats['total_output_tokens'] * MODEL_PRICING['output']
+                    )
+
+                    col_cost1, col_cost2, col_cost3 = st.columns(3)
+
+                    with col_cost1:
+                        st.metric("Input 비용", f"${stats['total_input_tokens'] * MODEL_PRICING['input']:.2f}")
+
+                    with col_cost2:
+                        st.metric("Output 비용", f"${stats['total_output_tokens'] * MODEL_PRICING['output']:.2f}")
+
+                    with col_cost3:
+                        st.metric("총 가상 비용", f"${virtual_cost:.2f}")
+
+                    # ROI 비교
+                    st.subheader("📊 ROI 분석")
+                    subscription_cost = 19.0  # $19/월
+                    prorated_subscription = subscription_cost * (days_in_period / 30)
+
+                    col_roi1, col_roi2, col_roi3 = st.columns(3)
+
+                    with col_roi1:
+                        st.metric("구독료 (기간 일할)", f"${prorated_subscription:.2f}")
+
+                    with col_roi2:
+                        st.metric("가상 사용 비용", f"${virtual_cost:.2f}")
+
+                    with col_roi3:
+                        savings = virtual_cost - prorated_subscription
+                        if savings > 0:
+                            st.metric("절감액", f"${savings:.2f}", delta=f"{(savings/virtual_cost)*100:.1f}% 절감")
+                        else:
+                            st.metric("손실", f"${-savings:.2f}", delta=f"{(-savings/prorated_subscription)*100:.1f}% 손실", delta_color="inverse")
+
+                except Exception as e:
+                    logger.error(f"S3 로그 분석 중 오류: {e}", exc_info=True)
+                    st.error(f"S3 로그 분석 중 오류가 발생했습니다: {e}")
+                    st.info("프롬프트 로깅이 활성화되어 있는지, S3 버킷에 로그 파일이 있는지 확인하세요.")
+
+        else:
+            # ===== 기존 Athena CSV 분석 =====
+            with st.spinner("Athena에서 Amazon Q CLI 데이터 분석 중..."):
+
+                # 사용자 패턴 정보 표시
+                if user_pattern:
+                    st.info(f"🔍 사용자 ID 패턴 필터링 적용: '{user_pattern}'")
+
+                # Tracker 초기화
+                tracker = QCliAthenaTracker(region=selected_region)
+
+                # 전체 요약
+                summary = tracker.get_total_summary(
+                    start_date, end_date, user_pattern if user_pattern else None
+                )
+
+                # 조회 기간 일수 계산
+                days_in_period = (end_date - start_date).days + 1
+
+                # 리밋 체크
+                limit_check = tracker.check_official_limits(summary, days_in_period)
+
+                # 추세 분석
+                trends = tracker.analyze_usage_trends(start_date, end_date, user_pattern if user_pattern else None)
+
+                # 사용자별 분석
+                user_df = tracker.get_user_usage_analysis(
+                    start_date, end_date, user_pattern if user_pattern else None
+                )
+
+                # 기능별 사용 통계
+                feature_df = tracker.get_feature_usage_stats(
+                    start_date, end_date, user_pattern if user_pattern else None
+                )
+
+                # 일별 사용 패턴
+                daily_df = tracker.get_daily_usage_pattern(
+                    start_date, end_date, user_pattern if user_pattern else None
+                )
+
+                # 토큰 추정
+                token_estimate = tracker.estimate_tokens(summary, "average")
 
             st.header("📊 전체 요약")
 
@@ -1597,15 +1902,6 @@ def render_qcli_analytics(selected_region, start_date, end_date):
 
             # 리밋 추적 섹션 (새로 추가)
             st.header("⚠️ 공식 리밋 모니터링")
-
-            # 조회 기간 일수 계산
-            days_in_period = (end_date - start_date).days + 1
-
-            # 리밋 체크
-            limit_check = tracker.check_official_limits(summary, days_in_period)
-
-            # 추세 분석
-            trends = tracker.analyze_usage_trends(start_date, end_date, user_pattern if user_pattern else None)
 
             # 리밋 상태 표시
             col_limit1, col_limit2 = st.columns(2)
