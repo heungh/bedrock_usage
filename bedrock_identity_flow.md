@@ -23,7 +23,7 @@ graph TD
     end
 
     %% 로그 및 결과
-    Logs[("📄 AWS CloudTrail &<br/>Bedrock Invocation Log")]
+    Logs[("📄 Amazon Bedrock Invocation Log")]
     
     LogRecord["📝 Log Record Details<br/><b>identity.arn</b>: <br/>arn:aws:iam::123456789012:role/App-A-BedrockRole"]
 
