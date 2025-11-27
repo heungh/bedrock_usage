@@ -15,7 +15,7 @@ graph LR
     subgraph Compute["🖥️ EC2 / ECS Instance (Application Running)"]
         direction TB
         
-        Role["🔑 IAM Instance Profile / Task Role<br/><b>arn:aws:iam::...:role/App-A-BedrockRole</b>"]
+        Role["🔑 IAM Instance Profile / Task Role<br/><b>arn:aws:iam::...:role/App-A-BedrockRole</b></br>"]
         
         Code["💻 Application Code (변경 없음)<br/><pre>bedrock_client = boto3.client('bedrock-runtime')<br/>bedrock_client.invoke_model(...)</pre>"]
         
