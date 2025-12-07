@@ -90,9 +90,8 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
 
 4. **필요한 IAM 권한**
 
-   > ⚠️ **중요**: 이 섹션은 **사용자(개발자/관리자)가 필요한 권한**입니다.
-   >
-   > **BedrockLoggingRole**은 별도로 자동 생성되며, 최소 권한만 포함됩니다:
+   > 바로 위에서 언급한 **BedrockLoggingRole**은 [`create-bedrock-logging-role.sh`](./create-bedrock-logging-role.sh) 스크립트를 통해 자동 생성되며, 최소 권한만 포함됩니다:
+   > 아래 "사전 준비: IAM Role 및 리소스 설정" 섹션에서 다시 설명합니다. 
    > - `logs:CreateLogStream`, `logs:PutLogEvents` (CloudWatch 쓰기)
    > - `s3:PutObject` (S3 쓰기)
    >
@@ -201,66 +200,13 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
 
 ---
 
-## 📋 권한 구조 이해하기
-
-### BedrockLoggingRole vs 사용자 권한
-
-이 프로젝트에는 **두 가지 다른 IAM 주체**가 있습니다:
-
-#### 1️⃣ **BedrockLoggingRole** (Bedrock 서비스용)
-`create-bedrock-logging-role.sh` 스크립트가 생성하는 Role로, **최소 권한 원칙**을 따릅니다.
-
-**포함된 정책:**
-- ✅ **BedrockCloudWatchLogsPolicy** (cloudwatch-only 또는 both 모드)
-  ```json
-  {
-    "Action": ["logs:CreateLogStream", "logs:PutLogEvents"],
-    "Resource": "arn:aws:logs:*:*:log-group:/aws/bedrock/modelinvocations:*"
-  }
-  ```
-
-- ✅ **BedrockS3LogsPolicy** (s3-only 또는 both 모드)
-  ```json
-  {
-    "Action": ["s3:PutObject"],
-    "Resource": "arn:aws:s3:::your-bucket/*/AWSLogs/*/BedrockModelInvocationLogs/*"
-  }
-  ```
-
-> 💡 **이 Role은 Bedrock 서비스가 로그를 쓰기 위한 용도**입니다. 사람이나 애플리케이션은 이 Role을 사용하지 않습니다.
-
-#### 2️⃣ **사용자/애플리케이션 권한** (개발자/관리자용)
-위의 "4. 필요한 IAM 권한" 섹션에 설명된 권한들로, 다음 작업을 위해 필요합니다:
-- 🔹 애플리케이션 실행 (bedrock:InvokeModel)
-- 🔹 로그 조회 (logs:DescribeLogGroups, logs:GetLogEvents 등)
-- 🔹 S3 버킷 생성 및 로그 조회 (s3:CreateBucket, s3:GetObject 등)
-- 🔹 초기 설정 (iam:CreateRole, bedrock:PutModelInvocationLoggingConfiguration 등)
-
-> 💡 **이 권한들은 사람(개발자/관리자)이 작업을 수행하기 위한 용도**입니다.
-
-### 권한 비교표
-
-| 구분 | BedrockLoggingRole | 사용자/애플리케이션 권한 |
-|------|-------------------|---------------------|
-| **주체** | Bedrock 서비스 | 개발자/관리자/애플리케이션 |
-| **목적** | 로그를 CloudWatch/S3에 쓰기 | 애플리케이션 실행, 로그 조회, 설정 관리 |
-| **생성 방법** | `create-bedrock-logging-role.sh` | IAM 정책 수동 설정 |
-| **권한 수** | 2개 정책 (최소 권한) | 5개 섹션 (다양한 작업) |
-| **CloudWatch** | `logs:CreateLogStream`<br>`logs:PutLogEvents` | `logs:DescribeLogGroups`<br>`logs:GetLogEvents`<br>`logs:StartQuery` 등 |
-| **S3** | `s3:PutObject` | `s3:CreateBucket`<br>`s3:GetObject`<br>`s3:ListBucket` 등 |
-| **Bedrock** | - (없음) | `bedrock:InvokeModel`<br>`bedrock:PutModelInvocationLoggingConfiguration` 등 |
-| **IAM** | - (없음) | `iam:CreateRole`<br>`iam:PutRolePolicy` 등 |
-| **필수 여부** | ✅ 필수 | 작업에 따라 다름 |
-
----
-
 ### 사전 준비: IAM Role 및 리소스 설정
 
 애플리케이션을 실행하기 전에 Bedrock 로깅을 위한 IAM Role과 리소스를 설정해야 합니다.
 
 #### 1. Bedrock 로깅용 IAM Role 생성 (필수)
 
-Bedrock이 CloudWatch Logs 및 S3에 로그를 쓸 수 있도록 IAM Role을 생성합니다.
+[`create-bedrock-logging-role.sh`](./create-bedrock-logging-role.sh) 스크립트를 사용하여 Bedrock이 CloudWatch Logs 및 S3에 로그를 쓸 수 있도록 IAM Role을 생성합니다.
 
 ```bash
 # CloudWatch Logs만 사용하는 경우 (기본값)
@@ -290,7 +236,7 @@ arn:aws:iam::123456789012:role/BedrockLoggingRole
 
 #### 2. S3 버킷 생성 (선택사항 - S3에 로그 저장 시)
 
-대용량 로그 데이터를 S3에 저장하거나 Athena로 분석하려면 S3 버킷을 생성합니다.
+대용량 로그 데이터를 S3에 저장하거나 Athena로 분석하려면 [`setup-s3-bucket-for-bedrock.sh`](./setup-s3-bucket-for-bedrock.sh) 스크립트를 사용하여 S3 버킷을 생성합니다.
 
 ```bash
 # 스크립트 내부의 변수를 수정하여 실행
@@ -304,11 +250,11 @@ arn:aws:iam::123456789012:role/BedrockLoggingRole
 - ✅ Bucket ACL 비활성화
 - ✅ Bedrock 서비스가 로그를 쓸 수 있도록 Bucket Policy 설정
 
-> 📝 **참고:** `setup-s3-bucket-for-bedrock.sh` 파일을 열어서 `S3_BUCKET_NAME` 변수를 원하는 버킷 이름으로 수정한 후 실행하세요.
+> 📝 **참고:** [`setup-s3-bucket-for-bedrock.sh`](./setup-s3-bucket-for-bedrock.sh) 파일을 열어서 `S3_BUCKET_NAME` 변수를 원하는 버킷 이름으로 수정한 후 실행하세요.
 
 #### 3. Bedrock 로깅 활성화 (필수)
 
-위에서 생성한 IAM Role을 사용하여 Bedrock 로깅을 활성화합니다.
+위에서 생성한 IAM Role을 사용하여 [`enable-bedrock-logging.sh`](./enable-bedrock-logging.sh) 스크립트로 Bedrock 로깅을 활성화합니다.
 
 ```bash
 # 스크립트 내부의 변수를 확인/수정 후 실행
@@ -321,7 +267,7 @@ arn:aws:iam::123456789012:role/BedrockLoggingRole
 - ✅ S3 대상 설정 (스크립트에서 S3_BUCKET_NAME이 설정된 경우)
 - ✅ 텍스트/이미지/임베딩 데이터 전송 활성화
 
-> 📝 **참고:** `enable-bedrock-logging.sh` 파일을 열어서 다음 변수를 확인하세요:
+> 📝 **참고:** [`enable-bedrock-logging.sh`](./enable-bedrock-logging.sh) 파일을 열어서 다음 변수를 확인하세요:
 > - `ROLE_NAME`: 위에서 생성한 Role 이름 (기본값: BedrockLoggingRole)
 > - `S3_BUCKET_NAME`: S3 사용 시 버킷 이름 (선택사항)
 
