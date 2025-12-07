@@ -202,19 +202,23 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
 Bedrock이 CloudWatch Logs 및 S3에 로그를 쓸 수 있도록 IAM Role을 생성합니다.
 
 ```bash
-# 기본 설정 (CloudWatch Logs만 사용)
-./create-bedrock-logging-role.sh
+# CloudWatch Logs만 사용하는 경우 (기본값)
+./create-bedrock-logging-role.sh --type cloudwatch-only
 
-# S3도 함께 사용하는 경우
-./create-bedrock-logging-role.sh your-s3-bucket-name
+# S3만 사용하는 경우 (비용 최적화, 장기 보관용)
+./create-bedrock-logging-role.sh --type s3-only --bucket your-s3-bucket-name
+
+# CloudWatch Logs와 S3 둘 다 사용하는 경우 (권장)
+./create-bedrock-logging-role.sh --type both --bucket your-s3-bucket-name
 ```
 
 **스크립트가 수행하는 작업:**
 - ✅ `BedrockLoggingRole` IAM Role 생성
 - ✅ Bedrock 서비스가 이 Role을 사용할 수 있도록 Trust Policy 설정
-- ✅ CloudWatch Logs에 쓰기 권한 부여
-- ✅ S3에 쓰기 권한 부여 (S3 버킷 이름을 제공한 경우)
-- ✅ CloudWatch Log Group `/aws/bedrock/modelinvocations` 생성
+- ✅ 선택한 타입에 따라:
+  - **cloudwatch-only**: CloudWatch Logs 쓰기 권한 부여 및 Log Group 생성
+  - **s3-only**: S3 쓰기 권한만 부여 (CloudWatch 설정 없음)
+  - **both**: CloudWatch와 S3 모두 설정
 
 **생성되는 Role ARN 예시:**
 ```
@@ -273,6 +277,34 @@ aws bedrock put-model-invocation-logging-configuration \
     "cloudWatchConfig": {
       "logGroupName": "/aws/bedrock/modelinvocations",
       "roleArn": "arn:aws:iam::'$ACCOUNT_ID':role/BedrockLoggingRole"
+    },
+    "textDataDeliveryEnabled": true,
+    "imageDataDeliveryEnabled": true,
+    "embeddingDataDeliveryEnabled": true
+  }'
+
+# S3만 사용하는 경우 (비용 최적화)
+aws bedrock put-model-invocation-logging-configuration \
+  --region us-east-1 \
+  --logging-config '{
+    "s3Config": {
+      "bucketName": "your-s3-bucket-name"
+    },
+    "textDataDeliveryEnabled": true,
+    "imageDataDeliveryEnabled": true,
+    "embeddingDataDeliveryEnabled": true
+  }'
+
+# CloudWatch와 S3 둘 다 사용하는 경우 (권장)
+aws bedrock put-model-invocation-logging-configuration \
+  --region us-east-1 \
+  --logging-config '{
+    "cloudWatchConfig": {
+      "logGroupName": "/aws/bedrock/modelinvocations",
+      "roleArn": "arn:aws:iam::'$ACCOUNT_ID':role/BedrockLoggingRole"
+    },
+    "s3Config": {
+      "bucketName": "your-s3-bucket-name"
     },
     "textDataDeliveryEnabled": true,
     "imageDataDeliveryEnabled": true,
