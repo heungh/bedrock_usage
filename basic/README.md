@@ -8,9 +8,9 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
 - ✅ Bedrock Converse API를 사용하는 Python 애플리케이션
 - ✅ `requestMetadata`를 통한 애플리케이션 식별
 - ✅ CloudWatch Logs Insights 쿼리 모음
-- ✅ 4가지 실전 시나리오 예시
+- ✅ 4가지 사용 예시
 
-## 🎯 주요 기능
+## 🎯 주요 내용
 
 ### 1. RequestMetadata를 통한 추적
 각 Bedrock API 호출에 다음 정보를 포함:
@@ -20,7 +20,7 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
 - 테넌트 ID (멀티테넌트 SaaS용)
 - 사용자 ID
 
-### 2. 4가지 시나리오
+### 2. 4가지 애플리케이션 사용예시 
 1. **Customer Service App** - 고객 지원 챗봇
 2. **Sales Assistant App** - 영업 지원 도구
 3. **Developer Tools App** - 내부 개발자 도구
@@ -89,6 +89,10 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
    ```
 
 4. **필요한 IAM 권한**
+
+   애플리케이션 실행 및 로깅 설정을 위해 다음 권한이 필요합니다:
+
+   **4-1. Bedrock API 호출 권한 (필수)**
    ```json
    {
      "Version": "2012-10-17",
@@ -99,11 +103,199 @@ AWS Bedrock의 `requestMetadata`를 활용하여 애플리케이션별 토큰 �
            "bedrock:InvokeModel",
            "bedrock:InvokeModelWithResponseStream"
          ],
-         "Resource": "arn:aws:bedrock:*::foundation-model/anthropic.claude-3-haiku-*"
+         "Resource": "arn:aws:bedrock:*::foundation-model/us.anthropic.claude-sonnet-4-5-*"
        }
      ]
    }
    ```
+
+   **4-2. CloudWatch Logs 조회 권한 (로그 확인용)**
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "logs:DescribeLogGroups",
+           "logs:DescribeLogStreams",
+           "logs:GetLogEvents",
+           "logs:FilterLogEvents",
+           "logs:StartQuery",
+           "logs:GetQueryResults"
+         ],
+         "Resource": "arn:aws:logs:*:*:log-group:/aws/bedrock/modelinvocations:*"
+       }
+     ]
+   }
+   ```
+
+   **4-3. S3 권한 (S3에 로그 저장 시 필요)**
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "s3:CreateBucket",
+           "s3:PutObject",
+           "s3:GetObject",
+           "s3:ListBucket",
+           "s3:PutBucketPolicy",
+           "s3:PutPublicAccessBlock",
+           "s3:PutBucketOwnershipControls"
+         ],
+         "Resource": [
+           "arn:aws:s3:::your-bedrock-logs-bucket",
+           "arn:aws:s3:::your-bedrock-logs-bucket/*"
+         ]
+       }
+     ]
+   }
+   ```
+
+   **4-4. IAM 권한 (Bedrock 로깅 Role 생성용)**
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "iam:CreateRole",
+           "iam:GetRole",
+           "iam:PutRolePolicy",
+           "iam:AttachRolePolicy",
+           "iam:PassRole"
+         ],
+         "Resource": "arn:aws:iam::*:role/BedrockLoggingRole"
+       }
+     ]
+   }
+   ```
+
+   **4-5. Bedrock 로깅 설정 권한**
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Action": [
+           "bedrock:PutModelInvocationLoggingConfiguration",
+           "bedrock:GetModelInvocationLoggingConfiguration",
+           "bedrock:DeleteModelInvocationLoggingConfiguration"
+         ],
+         "Resource": "*"
+       }
+     ]
+   }
+   ```
+
+### 사전 준비: IAM Role 및 리소스 설정
+
+애플리케이션을 실행하기 전에 Bedrock 로깅을 위한 IAM Role과 리소스를 설정해야 합니다.
+
+#### 1. Bedrock 로깅용 IAM Role 생성 (필수)
+
+Bedrock이 CloudWatch Logs 및 S3에 로그를 쓸 수 있도록 IAM Role을 생성합니다.
+
+```bash
+# 기본 설정 (CloudWatch Logs만 사용)
+./create-bedrock-logging-role.sh
+
+# S3도 함께 사용하는 경우
+./create-bedrock-logging-role.sh your-s3-bucket-name
+```
+
+**스크립트가 수행하는 작업:**
+- ✅ `BedrockLoggingRole` IAM Role 생성
+- ✅ Bedrock 서비스가 이 Role을 사용할 수 있도록 Trust Policy 설정
+- ✅ CloudWatch Logs에 쓰기 권한 부여
+- ✅ S3에 쓰기 권한 부여 (S3 버킷 이름을 제공한 경우)
+- ✅ CloudWatch Log Group `/aws/bedrock/modelinvocations` 생성
+
+**생성되는 Role ARN 예시:**
+```
+arn:aws:iam::123456789012:role/BedrockLoggingRole
+```
+
+> 💡 이 Role ARN은 다음 단계에서 Bedrock 로깅 설정 시 필요합니다.
+
+#### 2. S3 버킷 생성 (선택사항 - S3에 로그 저장 시)
+
+대용량 로그 데이터를 S3에 저장하거나 Athena로 분석하려면 S3 버킷을 생성합니다.
+
+```bash
+# 스크립트 내부의 변수를 수정하여 실행
+# S3_BUCKET_NAME과 REGION을 원하는 값으로 변경 후 실행
+./setup-s3-bucket-for-bedrock.sh
+```
+
+**스크립트가 수행하는 작업:**
+- ✅ S3 버킷 생성
+- ✅ 퍼블릭 액세스 차단 설정
+- ✅ Bucket ACL 비활성화
+- ✅ Bedrock 서비스가 로그를 쓸 수 있도록 Bucket Policy 설정
+
+> 📝 **참고:** `setup-s3-bucket-for-bedrock.sh` 파일을 열어서 `S3_BUCKET_NAME` 변수를 원하는 버킷 이름으로 수정한 후 실행하세요.
+
+#### 3. Bedrock 로깅 활성화 (필수)
+
+위에서 생성한 IAM Role을 사용하여 Bedrock 로깅을 활성화합니다.
+
+```bash
+# 스크립트 내부의 변수를 확인/수정 후 실행
+./enable-bedrock-logging.sh
+```
+
+**스크립트가 수행하는 작업:**
+- ✅ Bedrock Model Invocation Logging 활성화
+- ✅ CloudWatch Logs 대상 설정
+- ✅ S3 대상 설정 (스크립트에서 S3_BUCKET_NAME이 설정된 경우)
+- ✅ 텍스트/이미지/임베딩 데이터 전송 활성화
+
+> 📝 **참고:** `enable-bedrock-logging.sh` 파일을 열어서 다음 변수를 확인하세요:
+> - `ROLE_NAME`: 위에서 생성한 Role 이름 (기본값: BedrockLoggingRole)
+> - `S3_BUCKET_NAME`: S3 사용 시 버킷 이름 (선택사항)
+
+**또는 AWS CLI로 직접 설정:**
+
+```bash
+# Account ID 확인
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# CloudWatch Logs만 사용하는 경우
+aws bedrock put-model-invocation-logging-configuration \
+  --region us-east-1 \
+  --logging-config '{
+    "cloudWatchConfig": {
+      "logGroupName": "/aws/bedrock/modelinvocations",
+      "roleArn": "arn:aws:iam::'$ACCOUNT_ID':role/BedrockLoggingRole"
+    },
+    "textDataDeliveryEnabled": true,
+    "imageDataDeliveryEnabled": true,
+    "embeddingDataDeliveryEnabled": true
+  }'
+```
+
+#### 4. 설정 확인
+
+로깅이 제대로 활성화되었는지 확인합니다:
+
+```bash
+# 로깅 설정 확인
+aws bedrock get-model-invocation-logging-configuration --region us-east-1
+
+# IAM Role 확인
+aws iam get-role --role-name BedrockLoggingRole
+
+# CloudWatch Log Group 확인
+aws logs describe-log-groups --log-group-name-prefix /aws/bedrock/modelinvocations --region us-east-1
+```
+
+---
 
 ### 설치 및 실행
 
@@ -190,7 +382,7 @@ AWS Console
   "region": "us-east-1",
   "requestId": "abc123-def456",
   "operation": "Converse",
-  "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+  "modelId": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
   "requestMetadata": {
     "application_name": "CustomerServiceApp",
     "application_id": "app-001",
@@ -306,7 +498,7 @@ fields requestMetadata.cost_center as CostCenter,
 ```python
 # 각 API 호출에 tenant_id 포함
 response = client.converse(
-    modelId='anthropic.claude-3-haiku-20240307-v1:0',
+    modelId='us.anthropic.claude-sonnet-4-5-20250929-v1:0',
     messages=messages,
     requestMetadata={
         "tenant_id": "customer-acme",
@@ -373,13 +565,13 @@ fields requestMetadata.variant as Variant,
 ```python
 # 기존 Bedrock 호출 코드:
 response = client.converse(
-    modelId='anthropic.claude-3-haiku-20240307-v1:0',
+    modelId='us.anthropic.claude-sonnet-4-5-20250929-v1:0',
     messages=messages
 )
 
 # requestMetadata 추가:
 response = client.converse(
-    modelId='anthropic.claude-3-haiku-20240307-v1:0',
+    modelId='us.anthropic.claude-sonnet-4-5-20250929-v1:0',
     messages=messages,
     requestMetadata={
         "application_name": "YourAppName",
@@ -404,7 +596,7 @@ METADATA_CONFIG = {
 }
 
 response = client.converse(
-    modelId='anthropic.claude-3-haiku-20240307-v1:0',
+    modelId='us.anthropic.claude-sonnet-4-5-20250929-v1:0',
     messages=messages,
     requestMetadata=METADATA_CONFIG
 )
