@@ -243,25 +243,6 @@ fields @timestamp,
 
 ---
 
-## 🎯 실시간 모니터링
-
-### 쿼리 12: 최근 10분간 활동
-```sql
-fields @timestamp,
-       requestMetadata.application_name as App,
-       requestMetadata.environment as Env,
-       input.inputTokenCount + output.outputTokenCount as Tokens
-| filter @timestamp > ago(10m)
-| stats sum(Tokens) as TokensLast10Min,
-        count(*) as RequestsLast10Min
-  by App, Env
-| sort TokensLast10Min desc
-```
-
-**용도:** 실시간 대시보드, 알람 설정
-
----
-
 ## 🔄 IAM Role과 함께 분석
 
 ### 쿼리 13: IAM Role + RequestMetadata 결합 분석
