@@ -3,6 +3,7 @@
 ---
 
 ## 목차
+- [애플리케이션에 Request Metadata를 넣는 방법](#-애플리케이션에-request-metadata를-넣는-방법)
 - [애플리케이션별 Bedrock 사용량 추적](#-애플리케이션별-bedrock-사용량-추적)
   - [왜 필요한가?](#왜-필요한가)
   - [왜 이 방법인가?](#왜-이-방법인가)
@@ -21,6 +22,20 @@
 - [시스템 플로우](#시스템-플로우)
 - [데모](#데모)
 - [문제 해결](#문제-해결)
+
+---
+
+## 📝 애플리케이션에 Request Metadata를 넣는 방법
+
+**Bedrock API 호출 시 애플리케이션 정보를 추가하는 방법을 알고 싶으신가요?**
+
+AWS Bedrock의 **requestMetadata** 파라미터를 사용하면 코드 레벨에서 간단하게 애플리케이션 정보를 추가하고 추적할 수 있습니다.
+
+- Bedrock Converse API에 requestMetadata 파라미터 추가
+- CloudWatch Logs를 통해 애플리케이션별 사용량 조회
+- IAM Role 설정 없이 코드만으로 구현 가능
+
+자세한 구현 방법과 4가지 실전 예제는 **[basic 폴더의 README.md](./basic/README.md)** 를 참조하세요.
 
 ---
 
